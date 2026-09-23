@@ -316,8 +316,17 @@ function App() {
         headers: buildHeaders(keys),
         body: JSON.stringify({ message: trimmed }),
       })
-      const data = await response.json()
-      if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+      const text = await response.text()
+      let data = null
+      try {
+        data = JSON.parse(text)
+      } catch {
+        // Gateway or proxy answered with non-JSON (e.g. plain-text 502).
+      }
+      if (!response.ok || data?.error) {
+        const detail = data?.error || (text && text.length < 200 ? text.trim() : `HTTP ${response.status}`)
+        throw new Error(detail)
+      }
 
       setMessages((current) => [...current, { role: 'assistant', text: trimmed, advice: data }])
     } catch (error) {

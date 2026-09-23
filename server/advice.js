@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { pickAdvice } from '../src/adviceLibrary.js'
 
-const LLM_TIMEOUT_MS = 30000
-const JEV_TIMEOUT_MS = 10000
+// Budget must fit inside the edge gateway's ~60s cap: worst case = llm + jev + overhead < 60s.
+const LLM_TIMEOUT_MS = 52000
+const JEV_TIMEOUT_MS = 5000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
@@ -24,21 +25,21 @@ Keep a general LLM for open-ended reasoning, explanations, and unusual cases.
 Return ONLY valid JSON with exactly these keys:
 {
   "fit": "Strong fit" | "Promising fit" | "Poor fit",
-  "summary": string (2-3 sentences explaining where Jev fits or why it does not),
+  "summary": string (1-2 sentences explaining where Jev fits or why it does not),
   "decision": string (the exact bounded decision to give Jev, phrased as a question),
   "questionType": "choice" | "score" | "noul",
   "choices": string[] (2-6 finite options; for noul return ["true","false"]; for score return ordered low to high levels),
-  "steps": string[] (2-4 concrete implementation steps),
+  "steps": string[] (2-3 short implementation steps),
   "confidence": number between 0 and 1,
   "workflow": {
-    "without": [4-5 steps of handling ONE decision without Jev],
-    "with": [4-5 steps of handling the same decision with Jev as the gate]
+    "without": [4 steps of handling ONE decision without Jev],
+    "with": [4 steps of handling the same decision with Jev as the gate]
   }
 }
-Each workflow step is {"label": short scenario-specific step, "who": ..., "estMs": integer milliseconds}.
+Each workflow step is {"label": at most 8 words, scenario-specific, "who": ..., "estMs": integer milliseconds}.
 For "without", who is one of "system" | "llm" | "human" and the track MUST include the full LLM call (who "llm") plus a human double-check (who "human").
 For "with", who is one of "system" | "jev" | "llm" and the track MUST include the Jev gate (who "jev") and, when escalation matters, a later low-confidence escalation step (who "llm").
-Labels must be concrete for this project, never generic like "step 1". estMs realistic: system steps under 100, human review 30000-300000.
+estMs realistic: system steps under 100, human review 30000-300000.
 No markdown, no comments, no text outside the JSON object.`
 
 function json(data, status = 200) {
@@ -145,8 +146,9 @@ function sanitizeBaseUrl(raw, { strict }) {
   return null
 }
 
-// USD per 1M tokens for known models (OpenCode Go list); unknown models fall back to token counts.
+// USD per 1M tokens for known models (OpenCode Go docs); unknown models fall back to token counts.
 const PRICING = {
+  'glm-5.3-flash': { in: 0.15, out: 0.5 },
   'mimo-v2.6-flash': { in: 0.14, out: 0.28 },
   'mimo-v2.6-pro': { in: 0.435, out: 0.87 },
   'mimo-v2.5': { in: 0.14, out: 0.28 },
@@ -490,6 +492,10 @@ export async function adviceHandler(request) {
       ...(report ? { report } : {}),
     })
   } catch (error) {
-    return json({ error: `Advisor request failed: ${error?.message || error}` }, 502)
+    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+    const detail = timedOut
+      ? `the LLM did not answer within ${LLM_TIMEOUT_MS / 1000}s — please try again`
+      : error?.message || error
+    return json({ error: `Advisor request failed: ${detail}` }, 502)
   }
 }
