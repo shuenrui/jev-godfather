@@ -289,6 +289,7 @@ function App() {
   const [keys, setKeys] = useState(loadKeys)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const activeRequest = useRef(null)
+  const conversationGeneration = useRef(0)
 
   const hasOwnKey = Boolean(keys.llmKey)
 
@@ -299,6 +300,7 @@ function App() {
   }
 
   function clearConversation() {
+    conversationGeneration.current += 1
     activeRequest.current?.abort()
     activeRequest.current = null
     setInput('')
@@ -309,6 +311,7 @@ function App() {
   async function submit(text = input) {
     const trimmed = text.trim()
     if (!trimmed || isThinking) return
+    const generation = conversationGeneration.current
 
     setInput('')
     setMessages((current) => [...current, { role: 'user', text: trimmed }])
@@ -335,9 +338,11 @@ function App() {
         throw new Error(detail)
       }
 
+      if (generation !== conversationGeneration.current) return
       setMessages((current) => [...current, { role: 'assistant', text: trimmed, advice: data }])
     } catch (error) {
       if (error?.name === 'AbortError') return
+      if (generation !== conversationGeneration.current) return
       setMessages((current) => [
         ...current,
         {
