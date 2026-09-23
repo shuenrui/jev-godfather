@@ -194,6 +194,19 @@ function normalizeCard(raw) {
   }
 }
 
+function seedCard(message) {
+  const pattern = pickAdvice(message)
+  return normalizeCard({ ...pattern, candidates: [pattern] })
+}
+
+function screenInstruction(screen) {
+  if (!screen) return ''
+  return `
+Jev has already screened the request before you. Treat this screening as authoritative:
+${JSON.stringify({ verdict: screen.verdict, fit: screen.fit, decision: screen.decision, selectionBasis: screen.selectionBasis })}
+Do not reverse a Jev rejection into a Jev recommendation. If Jev rejected the boundary, explain what evidence is missing and keep the answer LLM-only. If Jev approved it, explain implementation around that exact boundary rather than inventing a broader one.`
+}
+
 function typeSafeExample(card, message) {
   const state = Object.fromEntries(
     (card.stateFields || ['project_request']).map((field) => [slug(field), `<${field}>`]),
@@ -287,7 +300,7 @@ function readConfig(request) {
   }
 }
 
-async function askLlm(message, config, { compact = false } = {}) {
+async function askLlm(message, config, { compact = false, screen = null } = {}) {
   const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
   // OpenCode Go rejects requests without a session id; hash keeps it stable per message.
   const session = createHash('sha256').update(message).digest('hex').slice(0, 64)
@@ -305,7 +318,7 @@ async function askLlm(message, config, { compact = false } = {}) {
       temperature: 0.2,
       messages: [
         { role: 'system', content: compact ? COMPACT_SYSTEM_PROMPT : SYSTEM_PROMPT },
-        { role: 'user', content: message.slice(0, 4000) },
+        { role: 'user', content: `${message.slice(0, 3600)}${screenInstruction(screen)}` },
       ],
       max_tokens: compact ? 900 : 1400,
     }),
@@ -433,11 +446,6 @@ function applyJev(card, jev) {
   }
 }
 
-function demoCard(message) {
-  const card = { ...pickAdvice(message) }
-  return { ...card, comparison: buildComparison(card), mode: 'demo', jevEvaluated: false }
-}
-
 function degradedCard(message, error) {
   const card = { ...pickAdvice(message) }
   return {
@@ -446,6 +454,17 @@ function degradedCard(message, error) {
     mode: 'degraded',
     jevEvaluated: false,
     error: `Live advisor timed out; showing a bounded starting pattern instead. ${error}`,
+  }
+}
+
+async function screenWithJev(message, config) {
+  if (!config.typesafeKey) return null
+  const seed = seedCard(message)
+  try {
+    const jev = await withDeadline(askJev(message, seed, config), JEV_TIMEOUT_MS, 'Jev screening')
+    return jev ? applyJev(seed, jev) : null
+  } catch {
+    return null
   }
 }
 
@@ -466,39 +485,57 @@ export async function adviceHandler(request) {
   const config = readConfig(request)
 
   if (!config.llmKey) {
-    const card = demoCard(message)
-    return json({ ...card, schema: typeSafeExample(card, message) })
+    const screen = await screenWithJev(message, config)
+    const card = screen || { ...pickAdvice(message) }
+    return json({
+      ...card,
+      comparison: buildComparison(card),
+      mode: screen ? 'jev-screened-demo' : 'demo',
+      jevEvaluated: Boolean(screen),
+      schema: typeSafeExample(card, message),
+    })
   }
 
+  let screen = null
   try {
+    screen = await screenWithJev(message, config)
     let result
     let compactRecovery = false
     try {
-      result = await withDeadline(askLlm(message, config), LLM_TIMEOUT_MS, 'LLM request')
+      result = await withDeadline(askLlm(message, config, { screen }), LLM_TIMEOUT_MS, 'LLM request')
     } catch (error) {
       const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
       if (!timedOut) throw error
-      result = await withDeadline(askLlm(message, config, { compact: true }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
+      result = await withDeadline(askLlm(message, config, { compact: true, screen }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
       compactRecovery = true
     }
-    const card = result.card
-    let jevEvaluated = false
-
-    try {
-      const jev = await withDeadline(askJev(message, card, config), JEV_TIMEOUT_MS, 'Jev request')
-      if (jev) {
-        Object.assign(card, applyJev(card, jev))
-        jevEvaluated = true
-      }
-    } catch {
-      // Jev evaluation is optional; the LLM recommendation still stands.
-    }
+    const card = screen
+      ? {
+          ...result.card,
+          fit: screen.fit,
+          fitClass: screen.fitClass,
+          verdict: screen.verdict,
+          decision: screen.decision,
+          questionType: screen.questionType,
+          choices: screen.choices,
+          stateFields: screen.stateFields,
+          jevOwns: screen.jevOwns,
+          codeOwns: screen.codeOwns,
+          avoid: screen.avoid,
+          threshold: screen.threshold,
+          fallback: screen.fallback,
+          successTest: screen.successTest,
+          selectionBasis: screen.selectionBasis,
+          screenedDecision: screen.decision,
+        }
+      : result.card
 
     return json({
       ...card,
       comparison: buildComparison(card),
       mode: compactRecovery ? 'live-compact' : 'live',
-      jevEvaluated,
+      jevEvaluated: Boolean(screen),
+      screening: screen ? 'jev-first' : 'llm-only',
       schema: typeSafeExample(card, message),
     })
   } catch (error) {
@@ -506,6 +543,27 @@ export async function adviceHandler(request) {
     const detail = timedOut
       ? `the LLM and compact recovery pass did not answer within the release budget — please try again`
       : error?.message || error
-    return json(degradedCard(message, detail), 200)
+    const fallback = degradedCard(message, detail)
+    if (screen) {
+      return json({
+        ...fallback,
+        fit: screen.fit,
+        fitClass: screen.fitClass,
+        verdict: screen.verdict,
+        decision: screen.decision,
+        questionType: screen.questionType,
+        choices: screen.choices,
+        stateFields: screen.stateFields,
+        jevOwns: screen.jevOwns,
+        codeOwns: screen.codeOwns,
+        threshold: screen.threshold,
+        fallback: screen.fallback,
+        successTest: screen.successTest,
+        selectionBasis: screen.selectionBasis,
+        jevEvaluated: true,
+        screening: 'jev-first',
+      }, 200)
+    }
+    return json(fallback, 200)
   }
 }
