@@ -160,20 +160,18 @@ function RecommendationDetails({ advice }) {
 function ComparisonBars({ metric, title }) {
   const bars = metric.bars || []
   return (
-    <div className="comparison-chart">
-      <div className="chart-heading">
-        <div><span className="eyebrow">{title}</span><p>{metric.unit}</p></div>
-        <span className="chart-status">{metric.status === 'estimated' ? 'ESTIMATE' : metric.status === 'not_measured' ? 'NO PAIRED DATA' : 'MEASURED'}</span>
-      </div>
-      <div className="bar-chart" role="img" aria-label={`${title} comparison: paired benchmark required`}>
+    <div className="dis-block comparison-chart">
+      <p className="dis-title">{title} · directional estimate</p>
+      <div className="bar-chart" role="img" aria-label={`${title} comparison: directional estimate`}>
         {bars.map((bar) => (
           <div className="bar-row" key={bar.label}>
             <span className="bar-label">{bar.label}</span>
-              <div className="bar-track"><span className="bar-fill" style={{ width: `${bar.value || 0}%` }} /><span className="bar-empty">{bar.display}</span></div>
+            <div className="bar-track"><span className="bar-fill" style={{ width: `${Math.min(bar.value || 0, 100)}%` }} /></div>
+            <span className="bar-value">{bar.display}</span>
           </div>
         ))}
       </div>
-      <p className="chart-note">{metric.note}</p>
+      <p className="dis-fn">{metric.note}</p>
     </div>
   )
 }
@@ -182,37 +180,32 @@ function ComparisonReport({ comparison }) {
   if (!comparison) return null
 
   return (
-    <section className="comparison-report" aria-label="Without Jev versus with Jev">
-      <div className="comparison-head">
-        <div>
-          <span className="eyebrow">THE COMPARISON</span>
-          <h2>Same decision, two paths</h2>
-        </div>
-        <span className="comparison-note">Architecture view · not a benchmark</span>
-      </div>
-
-      <div className="workflow-timeline" aria-label="Workflow timeline">
+    <section className="disruption" aria-label="Without Jev versus with Jev">
+      <span className="eyebrow">THE COMPARISON</span>
+      <div className="dis-block">
+        <p className="dis-title">Same decision, two paths</p>
+      <div className="workflow" aria-label="Workflow timeline">
         {[comparison.withoutJev, comparison.withJev].map((path) => (
-          <div className={`timeline-track ${path.label === 'With Jev' ? 'with-jev' : ''}`} key={path.label}>
-            <div className="path-heading"><span>{path.label}</span><span className="path-mark">{path.label === 'With Jev' ? 'BOUNDARY' : 'GENERAL'}</span></div>
-            <div className="timeline-steps">
+          <div className={`wf-track ${path.label === 'With Jev' ? 'with' : ''}`} key={path.label}>
+            <div className="wf-track-head"><span className="wf-track-name">{path.label}</span><span className="wf-total">{path.label === 'With Jev' ? 'boundary path' : 'general path'}</span></div>
+            <div className="wf-steps">
               {path.steps.map((step, index) => (
-                <div className="timeline-step" key={step}>
-                  <span className="timeline-node">{String(index + 1).padStart(2, '0')}</span>
-                  <p>{step}</p>
+                <div className="wf-step" key={step}>
+                  <span className="wf-num">{index + 1}</span>
+                  <p className="wf-label">{step}</p>
                 </div>
               ))}
             </div>
           </div>
         ))}
       </div>
-
-      <div className="comparison-charts">
-        <ComparisonBars metric={comparison.speed} title="SPEED" />
-        <ComparisonBars metric={comparison.cost} title="COST" />
+      <p className="dis-fn">workflow view · with Jev separates screening, execution, and verification</p>
       </div>
 
-      <p className="comparison-footnote">{comparison.evidence}</p>
+      <ComparisonBars metric={comparison.speed} title="Speed" />
+      <ComparisonBars metric={comparison.cost} title="Cost" />
+
+      <p className="dis-fn">{comparison.evidence}</p>
     </section>
   )
 }
