@@ -4,8 +4,8 @@ import { pickAdvice } from '../src/adviceLibrary.js'
 // Keep enough budget for a compact recovery pass plus the optional Jev call.
 // Keep the API inside a browser-friendly budget. A slow provider should become
 // a labelled bounded response, not an apparent offline failure in the client.
-const LLM_TIMEOUT_MS = 10000
-const COMPACT_LLM_TIMEOUT_MS = 6000
+const LLM_TIMEOUT_MS = 16000
+const COMPACT_LLM_TIMEOUT_MS = 7000
 const JEV_TIMEOUT_MS = 3000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
@@ -295,7 +295,7 @@ async function askLlm(message, config, { compact = false } = {}) {
         { role: 'system', content: compact ? COMPACT_SYSTEM_PROMPT : SYSTEM_PROMPT },
         { role: 'user', content: message.slice(0, 4000) },
       ],
-      max_tokens: compact ? 1200 : 1800,
+      max_tokens: compact ? 900 : 1400,
     }),
     signal: AbortSignal.timeout(compact ? COMPACT_LLM_TIMEOUT_MS : LLM_TIMEOUT_MS),
   })
