@@ -1,0 +1,14 @@
+app = 'jev-godfather'
+
+[build]
+cmd = 'node server/index.js'
+
+[service]
+internal_port = 8080
+autostop = false
+min_machines = 1
+
+[resources]
+cpu_kind = 'shared'
+cpus = 1
+memory_mb = 512
