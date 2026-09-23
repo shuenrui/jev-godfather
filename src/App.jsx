@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { pickAdvice, starters } from './adviceLibrary'
 import './App.css'
 
@@ -288,6 +288,7 @@ function App() {
   const [isThinking, setIsThinking] = useState(false)
   const [keys, setKeys] = useState(loadKeys)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const activeRequest = useRef(null)
 
   const hasOwnKey = Boolean(keys.llmKey)
 
@@ -297,6 +298,14 @@ function App() {
     setSettingsOpen(false)
   }
 
+  function clearConversation() {
+    activeRequest.current?.abort()
+    activeRequest.current = null
+    setInput('')
+    setMessages([])
+    setIsThinking(false)
+  }
+
   async function submit(text = input) {
     const trimmed = text.trim()
     if (!trimmed || isThinking) return
@@ -304,12 +313,15 @@ function App() {
     setInput('')
     setMessages((current) => [...current, { role: 'user', text: trimmed }])
     setIsThinking(true)
+    const controller = new AbortController()
+    activeRequest.current = controller
 
     try {
       const response = await fetch('/api/advice', {
         method: 'POST',
         headers: buildHeaders(keys),
         body: JSON.stringify({ message: trimmed }),
+        signal: controller.signal,
       })
       const text = await response.text()
       let data = null
@@ -325,6 +337,7 @@ function App() {
 
       setMessages((current) => [...current, { role: 'assistant', text: trimmed, advice: data }])
     } catch (error) {
+      if (error?.name === 'AbortError') return
       setMessages((current) => [
         ...current,
         {
@@ -334,6 +347,7 @@ function App() {
         },
       ])
     } finally {
+      if (activeRequest.current === controller) activeRequest.current = null
       setIsThinking(false)
     }
   }
@@ -358,7 +372,7 @@ function App() {
           </div>
         </div>
 
-        <button className="new-chat" type="button" onClick={() => setMessages([])}>
+        <button className="new-chat" type="button" onClick={clearConversation}>
           <span>+</span> New conversation
         </button>
 
@@ -381,7 +395,7 @@ function App() {
           <button className={`keys-button ${hasOwnKey ? 'has-keys' : ''}`} type="button" onClick={() => setSettingsOpen(true)}>
             <KeyIcon /> Keys
           </button>
-          <button className="topbar-button" type="button" onClick={() => setMessages([])}>Clear</button>
+          <button className="topbar-button" type="button" onClick={clearConversation}>Clear</button>
         </header>
 
         <section className={`chat-stage ${hasConversation ? 'has-conversation' : ''}`}>
