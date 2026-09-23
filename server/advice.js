@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto'
 import { pickAdvice } from '../src/adviceLibrary.js'
 
 // Keep enough budget for a compact recovery pass plus the optional Jev call.
-const LLM_TIMEOUT_MS = 30000
-const COMPACT_LLM_TIMEOUT_MS = 18000
-const JEV_TIMEOUT_MS = 5000
+// Keep the API inside a browser-friendly budget. A slow provider should become
+// a labelled bounded response, not an apparent offline failure in the client.
+const LLM_TIMEOUT_MS = 10000
+const COMPACT_LLM_TIMEOUT_MS = 6000
+const JEV_TIMEOUT_MS = 3000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
