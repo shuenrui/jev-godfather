@@ -1,74 +1,6 @@
 import { useState } from 'react'
+import { pickAdvice, starters } from './adviceLibrary'
 import './App.css'
-
-const starters = [
-  'I am building a support triage tool',
-  'I want to make my coding agent safer',
-  'I need to route tasks to different models',
-]
-
-const advice = {
-  default: {
-    fit: 'Promising fit',
-    fitClass: 'amber',
-    summary:
-      'Jev may belong at the decision boundary here. The next move is to turn the fuzzy part of this request into a small set of choices, scores, or yes/no judgments.',
-    decision: 'What decision repeats often enough to deserve its own fast, typed layer?',
-    choices: ['choice', 'score', 'noul'],
-    steps: [
-      'Name the state Jev should inspect and the finite answer space it should return.',
-      'Keep a general LLM for open-ended reasoning, explanations, and unusual cases.',
-      'Route low-confidence results to a stronger model or a human instead of forcing automation.',
-    ],
-  },
-  support: {
-    fit: 'Strong fit',
-    fitClass: 'green',
-    summary:
-      'Use Jev as the first-pass router for repetitive support decisions. It can classify each ticket quickly, then reserve a full LLM for nuanced replies.',
-    decision: 'Which team should handle this ticket?',
-    choices: ['billing', 'technical', 'sales', 'account'],
-    steps: [
-      'Send the ticket text and recent customer context as the state.',
-      'Ask Jev for department, urgency, and escalation as separate questions.',
-      'Auto-route high-confidence results; send the middle band to review.',
-    ],
-  },
-  safety: {
-    fit: 'Strong fit',
-    fitClass: 'green',
-    summary:
-      'Jev is useful as a fast safety gate before an agent executes a command. It should classify risk, not generate or rewrite the command.',
-    decision: 'Is this command safe to execute automatically?',
-    choices: ['safe', 'needs_review', 'destructive'],
-    steps: [
-      'Provide the command, working directory, and task context as the state.',
-      'Block destructive decisions by default and show the user the exact command.',
-      'Log the decision, confidence, and final human override for evaluation.',
-    ],
-  },
-  routing: {
-    fit: 'Strong fit',
-    fitClass: 'green',
-    summary:
-      'Use Jev as a cheap complexity classifier before the request reaches a model. It can keep simple work on a fast model and escalate only when needed.',
-    decision: 'What level of reasoning does this task need?',
-    choices: ['fast', 'deep', 'research'],
-    steps: [
-      'Define what each reasoning tier means in observable terms.',
-      'Start with conservative escalation thresholds while collecting outcomes.',
-      'Measure routing accuracy against task success, not just model preference.',
-    ],
-  },
-}
-
-function pickAdvice(text) {
-  const normalized = text.toLowerCase()
-  if (normalized.includes('support') || normalized.includes('ticket')) return advice.support
-  if (normalized.includes('safe') || normalized.includes('command') || normalized.includes('terminal')) return advice.safety
-  if (normalized.includes('route') || normalized.includes('model')) return advice.routing
-  return advice.default
-}
 
 function SparkIcon() {
   return (
@@ -87,12 +19,19 @@ function ArrowIcon() {
   )
 }
 
+function modeNote(advice) {
+  if (advice.mode === 'demo') return 'Demo response · set LLM_API_KEY for live advice'
+  if (advice.mode === 'offline') return `Offline fallback · ${advice.error || 'advisor unreachable'}`
+  if (advice.jevEvaluated) return 'Jev evaluated'
+  return null
+}
+
 function App() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState([])
   const [isThinking, setIsThinking] = useState(false)
 
-  function submit(text = input) {
+  async function submit(text = input) {
     const trimmed = text.trim()
     if (!trimmed || isThinking) return
 
@@ -100,13 +39,28 @@ function App() {
     setMessages((current) => [...current, { role: 'user', text: trimmed }])
     setIsThinking(true)
 
-    window.setTimeout(() => {
+    try {
+      const response = await fetch('/api/advice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: trimmed }),
+      })
+      const data = await response.json()
+      if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+
+      setMessages((current) => [...current, { role: 'assistant', text: trimmed, advice: data }])
+    } catch (error) {
       setMessages((current) => [
         ...current,
-        { role: 'assistant', text: trimmed, advice: pickAdvice(trimmed) },
+        {
+          role: 'assistant',
+          text: trimmed,
+          advice: { ...pickAdvice(trimmed), mode: 'offline', error: error?.message || 'request failed' },
+        },
       ])
+    } finally {
       setIsThinking(false)
-    }, 650)
+    }
   }
 
   function handleKeyDown(event) {
@@ -141,14 +95,14 @@ function App() {
         <div className="sidebar-footer">
           <span className="status-dot" />
           <span>Advisor mode</span>
-          <span className="version">v0.1</span>
+          <span className="version">v0.2</span>
         </div>
       </aside>
 
       <main className="conversation">
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><SparkIcon /></div><span>Jev Godfather</span></div>
-          <div className="topbar-meta"><span className="live-dot" /> Local prototype <span className="slash">/</span> Jev patterns</div>
+          <div className="topbar-meta"><span className="live-dot" /> Advisor API <span className="slash">/</span> Jev patterns</div>
           <button className="topbar-button" type="button" onClick={() => setMessages([])}>Clear</button>
         </header>
 
@@ -181,11 +135,34 @@ function App() {
                       <div className="advisor-avatar"><SparkIcon /></div>
                       <div><span className="message-label">JEV GODFATHER</span><p className="response-lede">Here&apos;s where Jev fits.</p></div>
                     </div>
-                    <div className="fit-row"><span className={`fit-pill ${message.advice.fitClass}`}><span />{message.advice.fit}</span><span className="confidence">Pattern match · 0.91</span></div>
+                    <div className="fit-row">
+                      <span className={`fit-pill ${message.advice.fitClass}`}><span />{message.advice.fit}</span>
+                      <span className="confidence">
+                        {message.advice.confidence != null
+                          ? `Confidence · ${Number(message.advice.confidence).toFixed(2)}`
+                          : 'Pattern match'}
+                      </span>
+                    </div>
                     <p className="summary">{message.advice.summary}</p>
-                    <div className="decision-block"><span className="eyebrow">THE DECISION</span><p>{message.advice.decision}</p><div className="choice-row">{message.advice.choices.map((choice) => <span key={choice}>{choice}</span>)}</div></div>
-                    <div className="steps-block"><span className="eyebrow">HOW TO USE IT</span><ol>{message.advice.steps.map((step) => <li key={step}>{step}</li>)}</ol></div>
-                    <button className="continue-button" type="button" onClick={() => setInput('Show me the TypeSafe request schema for this.')}>Continue with implementation <ArrowIcon /></button>
+                    <div className="decision-block">
+                      <span className="eyebrow">THE DECISION · {message.advice.questionType || 'choice'}</span>
+                      <p>{message.advice.decision}</p>
+                      <div className="choice-row">{message.advice.choices.map((choice) => <span key={choice}>{choice}</span>)}</div>
+                    </div>
+                    <div className="steps-block">
+                      <span className="eyebrow">HOW TO USE IT</span>
+                      <ol>{message.advice.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+                    </div>
+                    {message.advice.schema && (
+                      <details className="schema-details">
+                        <summary>View TypeSafe request</summary>
+                        <pre>{JSON.stringify(message.advice.schema, null, 2)}</pre>
+                      </details>
+                    )}
+                    <div className="card-foot">
+                      <button className="continue-button" type="button" onClick={() => setInput('Show me the TypeSafe request schema for this.')}>Continue with implementation <ArrowIcon /></button>
+                      {modeNote(message.advice) && <span className="mode-note">{modeNote(message.advice)}</span>}
+                    </div>
                   </article>
                 )
               ))}
