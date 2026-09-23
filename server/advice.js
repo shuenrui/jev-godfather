@@ -485,7 +485,7 @@ export async function adviceHandler(request) {
     let jevEvaluated = false
 
     try {
-      const jev = await askJev(message, card, config)
+      const jev = await withDeadline(askJev(message, card, config), JEV_TIMEOUT_MS, 'Jev request')
       if (jev) {
         Object.assign(card, applyJev(card, jev))
         jevEvaluated = true
