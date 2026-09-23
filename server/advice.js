@@ -29,8 +29,16 @@ Return ONLY valid JSON with exactly these keys:
   "questionType": "choice" | "score" | "noul",
   "choices": string[] (2-6 finite options; for noul return ["true","false"]; for score return ordered low to high levels),
   "steps": string[] (2-4 concrete implementation steps),
-  "confidence": number between 0 and 1
+  "confidence": number between 0 and 1,
+  "workflow": {
+    "without": [4-5 steps of handling ONE decision without Jev],
+    "with": [4-5 steps of handling the same decision with Jev as the gate]
+  }
 }
+Each workflow step is {"label": short scenario-specific step, "who": ..., "estMs": integer milliseconds}.
+For "without", who is one of "system" | "llm" | "human" and the track MUST include the full LLM call (who "llm") plus a human double-check (who "human").
+For "with", who is one of "system" | "jev" | "llm" and the track MUST include the Jev gate (who "jev") and, when escalation matters, a later low-confidence escalation step (who "llm").
+Labels must be concrete for this project, never generic like "step 1". estMs realistic: system steps under 100, human review 30000-300000.
 No markdown, no comments, no text outside the JSON object.`
 
 function json(data, status = 200) {
@@ -137,6 +145,147 @@ function sanitizeBaseUrl(raw, { strict }) {
   return null
 }
 
+// USD per 1M tokens for known models (OpenCode Go list); unknown models fall back to token counts.
+const PRICING = {
+  'mimo-v2.6-flash': { in: 0.14, out: 0.28 },
+  'mimo-v2.6-pro': { in: 0.435, out: 0.87 },
+  'mimo-v2.5': { in: 0.14, out: 0.28 },
+  'mimo-v2.5-pro': { in: 0.435, out: 0.87 },
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function normalizeWorkflowSide(raw, allowed) {
+  if (!Array.isArray(raw)) return null
+  const steps = raw
+    .filter((step) => step && typeof step.label === 'string' && step.label.trim())
+    .slice(0, 5)
+    .map((step) => ({
+      label: step.label.trim().slice(0, 140),
+      who: allowed.includes(step.who) ? step.who : 'system',
+      estMs: Math.round(clamp(Number(step.estMs) || 0, 0, 600000)),
+      measured: false,
+    }))
+  return steps.length >= 3 ? steps : null
+}
+
+function fallbackWorkflowWithout() {
+  return [
+    { label: 'Receive raw request text', who: 'system', estMs: 1, measured: false },
+    { label: 'Stuff context into one large prompt', who: 'system', estMs: 50, measured: false },
+    { label: 'Full LLM call returns a prose answer', who: 'llm', estMs: 0, measured: false },
+    { label: 'Read the answer, no calibration', who: 'system', estMs: 10, measured: false },
+    { label: 'Human double-checks the output', who: 'human', estMs: 60000, measured: false },
+  ]
+}
+
+function fallbackWorkflowWith() {
+  return [
+    { label: 'Build typed state from the request', who: 'system', estMs: 5, measured: false },
+    { label: 'Jev gate answers the typed questions', who: 'jev', estMs: 0, measured: false },
+    { label: 'Return typed answer from distribution', who: 'jev', estMs: 10, measured: false },
+    { label: 'Escalate low-confidence cases to LLM', who: 'llm', estMs: 0, measured: false },
+  ]
+}
+
+function markMeasured(steps, who, ms) {
+  if (!steps || !Number.isFinite(ms)) return
+  let target = -1
+  let best = -1
+  for (let i = 0; i < steps.length; i += 1) {
+    if (steps[i].who === who && steps[i].estMs >= best) {
+      best = steps[i].estMs
+      target = i
+    }
+  }
+  if (target >= 0) {
+    steps[target].estMs = Math.round(ms)
+    steps[target].measured = true
+  }
+}
+
+function sanitizeProbabilities(raw) {
+  const pick = (key) => {
+    const value = Number(raw?.[key])
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  }
+  let probs = { strong: pick('strong'), promising: pick('promising'), poor: pick('poor') }
+  const sum = probs.strong + probs.promising + probs.poor
+  if (sum > 0) {
+    probs = {
+      strong: probs.strong / sum,
+      promising: probs.promising / sum,
+      poor: probs.poor / sum,
+    }
+  } else {
+    probs = { strong: 1 / 3, promising: 1 / 3, poor: 1 / 3 }
+  }
+  return probs
+}
+
+function buildReport({ workflowRaw, llmMs, jevMs, usage, model, probabilities, llmConfidence, jevConfidence }) {
+  const without = normalizeWorkflowSide(workflowRaw?.without, ['system', 'llm', 'human']) || fallbackWorkflowWithout()
+  const withJev = normalizeWorkflowSide(workflowRaw?.with, ['system', 'jev', 'llm']) || fallbackWorkflowWith()
+
+  markMeasured(without, 'llm', llmMs)
+  markMeasured(withJev, 'jev', jevMs)
+  markMeasured(withJev, 'llm', llmMs)
+
+  const sumWhere = (steps, fn) => steps.filter(fn).reduce((total, step) => total + step.estMs, 0)
+  const withoutMs = sumWhere(without, (step) => step.who !== 'human')
+  const withFastMs = sumWhere(withJev, (step) => step.who !== 'llm')
+  const withEscalateMs = sumWhere(withJev, (step) => step.who === 'llm')
+
+  const probabilitiesClean = sanitizeProbabilities(probabilities)
+  const topProb = Math.max(probabilitiesClean.strong, probabilitiesClean.promising, probabilitiesClean.poor)
+  const escalateRate = clamp(1 - topProb, 0.05, 0.6)
+  const blendedMs = Math.round(withFastMs + escalateRate * withEscalateMs)
+
+  const tokens = usage
+    ? { in: Math.round(Number(usage.prompt_tokens) || 0), out: Math.round(Number(usage.completion_tokens) || 0) }
+    : null
+  const rate = PRICING[model]
+  let price
+  if (rate && tokens) {
+    const perCall = (tokens.in * rate.in) / 1e6 + (tokens.out * rate.out) / 1e6
+    price = {
+      known: true,
+      model,
+      tokens,
+      per1kWithout: Math.round(perCall * 1000 * 10000) / 10000,
+      per1kWith: Math.round(perCall * 1000 * escalateRate * 10000) / 10000,
+    }
+  } else {
+    price = { known: false, tokens }
+  }
+
+  return {
+    workflow: {
+      without,
+      with: withJev,
+      totals: { withoutMs, withFastMs, withBlendedMs: blendedMs },
+    },
+    speed: {
+      llmMs: Math.round(llmMs),
+      jevMs: Math.round(jevMs),
+      speedup: jevMs > 0 ? Math.round((llmMs / jevMs) * 10) / 10 : null,
+      blendedMs,
+    },
+    price,
+    coverage: {
+      autoPct: Math.round((1 - escalateRate) * 100),
+      escalatePct: Math.round(escalateRate * 100),
+      topProb: Math.round(topProb * 100) / 100,
+      escalateRate: Math.round(escalateRate * 100) / 100,
+      probabilities: probabilitiesClean,
+      llmConfidence: typeof llmConfidence === 'number' ? llmConfidence : null,
+      jevConfidence: typeof jevConfidence === 'number' ? jevConfidence : null,
+    },
+  }
+}
+
 // Per-request keys (from the user's browser) win over server env config.
 function readConfig(request) {
   const header = (name) => {
@@ -188,7 +337,12 @@ async function askLlm(message, config) {
   const data = await response.json()
   const content = data?.choices?.[0]?.message?.content
   if (typeof content !== 'string') throw new Error('LLM returned no content')
-  return normalizeCard(extractJson(content))
+  const raw = extractJson(content)
+  return {
+    card: normalizeCard(raw),
+    usage: data?.usage && typeof data.usage === 'object' ? data.usage : null,
+    workflow: raw?.workflow && typeof raw.workflow === 'object' ? raw.workflow : null,
+  }
 }
 
 async function askJev(message, card, config) {
@@ -240,6 +394,7 @@ async function askJev(message, card, config) {
     bounded: Number(data?.answers?.bounded?.noul ?? 1),
     longHorizon: Number(data?.answers?.long_horizon?.noul ?? 0),
     confidence: Number(data?.answers?.fit?.confidence ?? 0) || null,
+    probabilities: data?.answers?.fit?.probabilities || null,
   }
 }
 
@@ -289,24 +444,50 @@ export async function adviceHandler(request) {
   }
 
   try {
-    const card = await askLlm(message, config)
+    const llmStarted = Date.now()
+    const result = await askLlm(message, config)
+    const llmMs = Date.now() - llmStarted
+    const card = result.card
+    const llmConfidence = card.confidence
+
     let jevEvaluated = false
+    let jevMs = 0
+    let probabilities = null
+    let jevConfidence = null
 
     try {
+      const jevStarted = Date.now()
       const jev = await askJev(message, card, config)
+      jevMs = Date.now() - jevStarted
       if (jev) {
         Object.assign(card, applyJev(card, jev))
         jevEvaluated = true
+        probabilities = jev.probabilities
+        jevConfidence = jev.confidence
       }
     } catch {
       // Jev evaluation is optional; the LLM card still stands.
     }
+
+    const report = jevEvaluated
+      ? buildReport({
+          workflowRaw: result.workflow,
+          llmMs,
+          jevMs,
+          usage: result.usage,
+          model: config.llmModel,
+          probabilities,
+          llmConfidence,
+          jevConfidence,
+        })
+      : null
 
     return json({
       ...card,
       mode: 'live',
       jevEvaluated,
       schema: typeSafeExample(card, message),
+      ...(report ? { report } : {}),
     })
   } catch (error) {
     return json({ error: `Advisor request failed: ${error?.message || error}` }, 502)

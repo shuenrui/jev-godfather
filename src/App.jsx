@@ -65,6 +65,156 @@ function modeNote(advice, hasOwnKey) {
   return parts.length ? parts.join(' · ') : null
 }
 
+function formatMs(ms) {
+  if (!Number.isFinite(ms)) return '—'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${(ms / 60000).toFixed(1)}m`
+}
+
+function formatUsd(value) {
+  if (!Number.isFinite(value)) return '—'
+  if (value >= 10) return `$${value.toFixed(0)}`
+  if (value >= 0.01) return `$${value.toFixed(2)}`
+  return `$${value.toFixed(4)}`
+}
+
+function WhoBadge({ who }) {
+  return <span className={`who who-${who}`}>{who}</span>
+}
+
+function WorkflowTrack({ label, steps, variant, totalNote, lastBranches }) {
+  return (
+    <div className={`wf-track ${variant || ''}`}>
+      <div className="wf-track-head">
+        <span className="wf-track-name">{label}</span>
+        <span className="wf-total">{totalNote}</span>
+      </div>
+      {steps.map((step, index) => (
+        <div
+          className={`wf-step ${lastBranches && step.who === 'llm' ? 'escalate' : ''}`}
+          key={`${label}-${step.label}-${index}`}
+        >
+          <span className="wf-num">{index + 1}</span>
+          <div className="wf-body">
+            <span className="wf-label">{step.label}</span>
+            <div className="wf-meta">
+              <WhoBadge who={step.who} />
+              <span className={`wf-time ${step.measured ? 'measured' : ''}`}>
+                {formatMs(step.estMs)}{step.measured ? ' · measured' : ' · est.'}
+              </span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DisruptionReport({ report }) {
+  const { workflow, speed, price, coverage } = report
+  const withoutSteps = workflow.without
+  const withSteps = workflow.with
+  const withHasEscalate = withSteps.some((step) => step.who === 'llm')
+
+  const speedMax = Math.max(speed.llmMs, speed.jevMs, 1)
+  const jevBarPct = Math.max((speed.jevMs / speedMax) * 100, 4)
+  const priceMax = price.known ? Math.max(price.per1kWithout, price.per1kWith, 0.0001) : 1
+  const withPricePct = price.known ? Math.max((price.per1kWith / priceMax) * 100, 4) : 0
+
+  return (
+    <section className="disruption" aria-label="Disruption report">
+      <span className="eyebrow">The disruption</span>
+
+      <div className="dis-block">
+        <p className="dis-title">Same decision, two paths</p>
+        <div className="workflow">
+          <WorkflowTrack
+            label="Without Jev"
+            steps={withoutSteps}
+            totalNote={`${formatMs(workflow.totals.withoutMs)} machine`}
+          />
+          <WorkflowTrack
+            label="With Jev"
+            steps={withSteps}
+            variant="with"
+            totalNote={`${formatMs(workflow.totals.withFastMs)} fast`}
+            lastBranches={withHasEscalate}
+          />
+        </div>
+        <p className="dis-fn">
+          human review excluded from totals · with Jev, including escalations, ~{formatMs(workflow.totals.withBlendedMs)} expected
+        </p>
+      </div>
+
+      <div className="dis-block">
+        <p className="dis-title">Speed · measured on this request</p>
+        <div className="bar-row">
+          <span className="bar-label">Full LLM</span>
+          <div className="bar-track" aria-hidden="true"><div className="bar-fill muted" style={{ width: '100%' }} /></div>
+          <span className="bar-value">{formatMs(speed.llmMs)} · measured</span>
+        </div>
+        <div className="bar-row">
+          <span className="bar-label">Jev gate</span>
+          <div className="bar-track" aria-hidden="true"><div className="bar-fill accent" style={{ width: `${jevBarPct}%` }} /></div>
+          <span className="bar-value">
+            {formatMs(speed.jevMs)}{speed.speedup ? ` · ${speed.speedup}× faster` : ''}
+          </span>
+        </div>
+      </div>
+
+      <div className="dis-block">
+        <p className="dis-title">Price · LLM spend per 1,000 decisions</p>
+        {price.known ? (
+          <>
+            <div className="bar-row">
+              <span className="bar-label">Without Jev</span>
+              <div className="bar-track" aria-hidden="true"><div className="bar-fill muted" style={{ width: '100%' }} /></div>
+              <span className="bar-value">{formatUsd(price.per1kWithout)} / 1k</span>
+            </div>
+            <div className="bar-row">
+              <span className="bar-label">With Jev</span>
+              <div className="bar-track" aria-hidden="true"><div className="bar-fill accent" style={{ width: `${withPricePct}%` }} /></div>
+              <span className="bar-value">{formatUsd(price.per1kWith)} / 1k</span>
+            </div>
+            <p className="dis-fn">
+              {formatUsd(price.per1kWithout * 1000)} / 1,000 → {formatUsd(price.per1kWith * 1000)} · with Jev assumes {coverage.escalatePct}% escalate to the LLM · {price.model}
+            </p>
+          </>
+        ) : (
+          <p className="dis-fn">
+            {price.tokens
+              ? `usage this call · ${price.tokens.in} in / ${price.tokens.out} out tokens · pricing unknown for this model`
+              : 'no usage data returned for this call'}
+          </p>
+        )}
+      </div>
+
+      <div className="dis-block">
+        <p className="dis-title">Accuracy · where decisions land</p>
+        <div
+          className="stacked"
+          role="img"
+          aria-label={`${coverage.autoPct} percent auto-decide, ${coverage.escalatePct} percent escalate`}
+        >
+          <div className="stack-auto" style={{ width: `${coverage.autoPct}%` }} />
+          <div className="stack-esc" style={{ width: `${coverage.escalatePct}%` }} />
+        </div>
+        <div className="stacked-legend">
+          <span><span className="legend-dot dot-gold" />auto-decide {coverage.autoPct}%</span>
+          <span><span className="legend-dot dot-red" />escalate {coverage.escalatePct}% → LLM / human</span>
+        </div>
+        <p className="calib">
+          self-reported {coverage.llmConfidence != null ? coverage.llmConfidence.toFixed(2) : '—'}
+          <span className="arrow"> → </span>
+          calibrated {coverage.jevConfidence != null ? coverage.jevConfidence.toFixed(2) : '—'}
+        </p>
+        <p className="dis-fn">escalation share estimated from Jev&apos;s fit distribution (top choice {coverage.topProb})</p>
+      </div>
+    </section>
+  )
+}
+
 function SettingsPanel({ keys, onSave, onClose }) {
   const [draft, setDraft] = useState(keys)
 
@@ -268,15 +418,18 @@ function App() {
                       </span>
                     </div>
                     <p className="summary">{message.advice.summary}</p>
+                    {message.advice.report && <DisruptionReport report={message.advice.report} />}
                     <div className="decision-block">
                       <span className="eyebrow">THE DECISION · {message.advice.questionType || 'choice'}</span>
                       <p>{message.advice.decision}</p>
                       <div className="choice-row">{message.advice.choices.map((choice) => <span key={choice}>{choice}</span>)}</div>
                     </div>
-                    <div className="steps-block">
-                      <span className="eyebrow">HOW TO USE IT</span>
-                      <ol>{message.advice.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-                    </div>
+                    {!message.advice.report && (
+                      <div className="steps-block">
+                        <span className="eyebrow">HOW TO USE IT</span>
+                        <ol>{message.advice.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+                      </div>
+                    )}
                     {message.advice.schema && (
                       <details className="schema-details">
                         <summary>View TypeSafe request</summary>
