@@ -2,6 +2,34 @@ import { useState } from 'react'
 import { pickAdvice, starters } from './adviceLibrary'
 import './App.css'
 
+const STORAGE_KEY = 'jev-godfather-keys'
+
+function loadKeys() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveKeys(keys) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(keys))
+  } catch {
+    // Private browsing: keys stay in memory for this tab only.
+  }
+}
+
+function buildHeaders(keys) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (keys.llmKey) headers['x-llm-api-key'] = keys.llmKey
+  if (keys.llmBaseUrl) headers['x-llm-base-url'] = keys.llmBaseUrl
+  if (keys.llmModel) headers['x-llm-model'] = keys.llmModel
+  if (keys.typesafeKey) headers['x-typesafe-api-key'] = keys.typesafeKey
+  return headers
+}
+
 function SparkIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -19,17 +47,110 @@ function ArrowIcon() {
   )
 }
 
-function modeNote(advice) {
-  if (advice.mode === 'demo') return 'Demo response · set LLM_API_KEY for live advice'
+function KeyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="8" cy="12" r="4" />
+      <path d="M12 12h9M17 12v4M20 12v3" />
+    </svg>
+  )
+}
+
+function modeNote(advice, hasOwnKey) {
+  if (advice.mode === 'demo') return 'Demo response · add your LLM key in Keys'
   if (advice.mode === 'offline') return `Offline fallback · ${advice.error || 'advisor unreachable'}`
-  if (advice.jevEvaluated) return 'Jev evaluated'
-  return null
+  const parts = []
+  if (advice.jevEvaluated) parts.push('Jev evaluated')
+  if (hasOwnKey) parts.push('your token')
+  return parts.length ? parts.join(' · ') : null
+}
+
+function SettingsPanel({ keys, onSave, onClose }) {
+  const [draft, setDraft] = useState(keys)
+
+  function update(field, value) {
+    setDraft((current) => ({ ...current, [field]: value }))
+  }
+
+  function submit(event) {
+    event.preventDefault()
+    const cleaned = {}
+    for (const [field, value] of Object.entries(draft)) {
+      const trimmed = String(value || '').trim()
+      if (trimmed) cleaned[field] = trimmed
+    }
+    onSave(cleaned)
+  }
+
+  return (
+    <div
+      className="settings-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onClose()
+      }}
+    >
+      <form className="settings-panel" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="keys-title">
+        <div className="settings-head">
+          <div className="brand-mark"><KeyIcon /></div>
+          <div>
+            <p id="keys-title" className="settings-title">Your API keys</p>
+            <p className="settings-sub">Used for your requests only.</p>
+          </div>
+          <button className="settings-close" type="button" onClick={onClose} aria-label="Close keys panel">×</button>
+        </div>
+
+        <label className="settings-field">
+          <span>LLM API key</span>
+          <input type="password" autoComplete="off" spellCheck="false" placeholder="sk-…" value={draft.llmKey || ''} onChange={(event) => update('llmKey', event.target.value)} autoFocus />
+        </label>
+
+        <div className="settings-grid">
+          <label className="settings-field">
+            <span>LLM base URL</span>
+            <input type="text" autoComplete="off" spellCheck="false" placeholder="https://api.openai.com/v1" value={draft.llmBaseUrl || ''} onChange={(event) => update('llmBaseUrl', event.target.value)} />
+          </label>
+          <label className="settings-field">
+            <span>Model</span>
+            <input type="text" autoComplete="off" spellCheck="false" placeholder="gpt-4o-mini" value={draft.llmModel || ''} onChange={(event) => update('llmModel', event.target.value)} />
+          </label>
+        </div>
+
+        <label className="settings-field">
+          <span>TypeSafe / Jev API key <em>optional · enables Jev evaluation</em></span>
+          <input type="password" autoComplete="off" spellCheck="false" placeholder="tsk_…" value={draft.typesafeKey || ''} onChange={(event) => update('typesafeKey', event.target.value)} />
+        </label>
+
+        <p className="settings-note">
+          Keys are saved in this browser&apos;s local storage and sent as headers with your requests.
+          They are never written to disk by this app. Base URLs must be https or localhost.
+        </p>
+
+        <div className="settings-actions">
+          <button className="settings-clear" type="button" onClick={() => onSave({})}>Clear all</button>
+          <button className="settings-save" type="submit">Save keys</button>
+        </div>
+      </form>
+    </div>
+  )
 }
 
 function App() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState([])
   const [isThinking, setIsThinking] = useState(false)
+  const [keys, setKeys] = useState(loadKeys)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  const hasOwnKey = Boolean(keys.llmKey)
+
+  function persistKeys(next) {
+    setKeys(next)
+    saveKeys(next)
+    setSettingsOpen(false)
+  }
 
   async function submit(text = input) {
     const trimmed = text.trim()
@@ -42,7 +163,7 @@ function App() {
     try {
       const response = await fetch('/api/advice', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildHeaders(keys),
         body: JSON.stringify({ message: trimmed }),
       })
       const data = await response.json()
@@ -94,8 +215,8 @@ function App() {
 
         <div className="sidebar-footer">
           <span className="status-dot" />
-          <span>Advisor mode</span>
-          <span className="version">v0.2</span>
+          <span>{hasOwnKey ? 'Own token active' : 'Advisor mode'}</span>
+          <span className="version">v0.3</span>
         </div>
       </aside>
 
@@ -103,6 +224,9 @@ function App() {
         <header className="topbar">
           <div className="mobile-brand"><div className="brand-mark"><SparkIcon /></div><span>Jev Godfather</span></div>
           <div className="topbar-meta"><span className="live-dot" /> Advisor API <span className="slash">/</span> Jev patterns</div>
+          <button className={`keys-button ${hasOwnKey ? 'has-keys' : ''}`} type="button" onClick={() => setSettingsOpen(true)}>
+            <KeyIcon /> Keys
+          </button>
           <button className="topbar-button" type="button" onClick={() => setMessages([])}>Clear</button>
         </header>
 
@@ -161,7 +285,7 @@ function App() {
                     )}
                     <div className="card-foot">
                       <button className="continue-button" type="button" onClick={() => setInput('Show me the TypeSafe request schema for this.')}>Continue with implementation <ArrowIcon /></button>
-                      {modeNote(message.advice) && <span className="mode-note">{modeNote(message.advice)}</span>}
+                      {modeNote(message.advice, hasOwnKey) && <span className="mode-note">{modeNote(message.advice, hasOwnKey)}</span>}
                     </div>
                   </article>
                 )
@@ -179,6 +303,8 @@ function App() {
           <p className="composer-hint">Jev is strongest when the answer space is bounded. <span>Shift + Enter</span> for a new line.</p>
         </form>
       </main>
+
+      {settingsOpen && <SettingsPanel keys={keys} onSave={persistKeys} onClose={() => setSettingsOpen(false)} />}
     </div>
   )
 }

@@ -21,6 +21,19 @@ API keys live only on the server. The browser never receives them.
 - LLM configured, `TYPESAFE_API_KEY` unset → live advice from the LLM only.
 - Both configured → Jev evaluates fit and overrides the label, marked **Jev evaluated**.
 
+## Using your own keys
+
+Open **Keys** in the header to paste your own tokens:
+
+- LLM API key, base URL, and model
+- TypeSafe / Jev API key (optional)
+
+Keys are stored in this browser's `localStorage` only, sent as `x-*-api-key`
+headers with your requests, and never written to disk by the app. Per-request
+keys override the server's env defaults, so one deployment can serve many
+people with their own tokens. User-supplied base URLs must be `https` (or
+`http://localhost` for local testing).
+
 ## Run locally
 
 ```bash

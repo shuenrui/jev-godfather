@@ -118,10 +118,48 @@ function typeSafeExample(card, message) {
   return { model: 'jev-latest', state, questions: { decision: question } }
 }
 
-async function askLlm(message) {
-  const key = process.env.LLM_API_KEY
-  const baseUrl = (process.env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
-  const model = process.env.LLM_MODEL || 'gpt-4o-mini'
+function sanitizeBaseUrl(raw, { strict }) {
+  const value = String(raw || '').trim().slice(0, 512)
+  if (!value) return null
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    return null
+  }
+  if (url.protocol === 'https:') return value.replace(/\/$/, '')
+  if (url.protocol === 'http:') {
+    const local = ['localhost', '127.0.0.1', '::1'].includes(url.hostname)
+    if (!strict || local) return value.replace(/\/$/, '')
+  }
+  return null
+}
+
+// Per-request keys (from the user's browser) win over server env config.
+function readConfig(request) {
+  const header = (name) => {
+    const value = request.headers.get(name)
+    return typeof value === 'string' ? value.trim().slice(0, 2048) : ''
+  }
+  const pick = (headerName, envName) => header(headerName) || (process.env[envName] || '').trim()
+
+  return {
+    llmKey: pick('x-llm-api-key', 'LLM_API_KEY').slice(0, 512),
+    llmBaseUrl:
+      sanitizeBaseUrl(header('x-llm-base-url'), { strict: true }) ||
+      sanitizeBaseUrl(process.env.LLM_BASE_URL, { strict: false }) ||
+      'https://api.openai.com/v1',
+    llmModel: pick('x-llm-model', 'LLM_MODEL').slice(0, 128) || 'gpt-4o-mini',
+    typesafeKey: pick('x-typesafe-api-key', 'TYPESAFE_API_KEY').slice(0, 512),
+    typesafeBaseUrl:
+      sanitizeBaseUrl(header('x-typesafe-base-url'), { strict: true }) ||
+      sanitizeBaseUrl(process.env.TYPESAFE_BASE_URL, { strict: false }) ||
+      'https://api.typesafe.ai/v1',
+  }
+}
+
+async function askLlm(message, config) {
+  const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -144,10 +182,10 @@ async function askLlm(message) {
   return normalizeCard(extractJson(content))
 }
 
-async function askJev(message, card) {
-  const key = process.env.TYPESAFE_API_KEY
+async function askJev(message, card, config) {
+  const key = config.typesafeKey
   if (!key) return null
-  const baseUrl = (process.env.TYPESAFE_BASE_URL || 'https://api.typesafe.ai/v1').replace(/\/$/, '')
+  const baseUrl = config.typesafeBaseUrl
 
   const body = {
     model: process.env.TYPESAFE_MODEL || 'jev-latest',
@@ -234,17 +272,19 @@ export async function adviceHandler(request) {
   if (!message) return json({ error: 'A non-empty message is required' }, 400)
   if (message.length > 4000) return json({ error: 'Message must be 4000 characters or fewer' }, 400)
 
-  if (!process.env.LLM_API_KEY) {
+  const config = readConfig(request)
+
+  if (!config.llmKey) {
     const card = demoCard(message)
     return json({ ...card, schema: typeSafeExample(card, message) })
   }
 
   try {
-    const card = await askLlm(message)
+    const card = await askLlm(message, config)
     let jevEvaluated = false
 
     try {
-      const jev = await askJev(message, card)
+      const jev = await askJev(message, card, config)
       if (jev) {
         Object.assign(card, applyJev(card, jev))
         jevEvaluated = true

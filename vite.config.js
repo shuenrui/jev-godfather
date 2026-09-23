@@ -15,6 +15,15 @@ function envPlugin() {
   }
 }
 
+const FORWARDED_HEADERS = [
+  'content-type',
+  'x-llm-api-key',
+  'x-llm-base-url',
+  'x-llm-model',
+  'x-typesafe-api-key',
+  'x-typesafe-base-url',
+]
+
 function adviceApiPlugin() {
   async function connectHandler(req, res) {
     try {
@@ -22,12 +31,16 @@ function adviceApiPlugin() {
       for await (const chunk of req) chunks.push(chunk)
       const payload = Buffer.concat(chunks)
 
+      const headers = {}
+      for (const name of FORWARDED_HEADERS) {
+        const value = req.headers[name]
+        if (typeof value === 'string' && value) headers[name] = value
+      }
+      if (!headers['content-type']) headers['content-type'] = 'application/json'
+
       const request = new Request('http://localhost/api/advice', {
         method: req.method || 'GET',
-        headers: {
-          'Content-Type': req.headers['content-type'] || 'application/json',
-          'Content-Length': req.headers['content-length'] || '',
-        },
+        headers,
         body: payload.length ? payload : undefined,
       })
 
