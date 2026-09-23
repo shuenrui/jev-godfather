@@ -306,6 +306,7 @@ function App() {
     setInput('')
     setMessages([])
     setIsThinking(false)
+    window.location.reload()
   }
 
   async function submit(text = input) {
