@@ -7,6 +7,7 @@ import { pickAdvice } from '../src/adviceLibrary.js'
 const LLM_TIMEOUT_MS = 10000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
+const SCREENED_LLM_TIMEOUT_MS = 6000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
@@ -501,13 +502,31 @@ export async function adviceHandler(request) {
     screen = await screenWithJev(message, config)
     let result
     let compactRecovery = false
-    try {
-      result = await withDeadline(askLlm(message, config, { screen }), LLM_TIMEOUT_MS, 'LLM request')
-    } catch (error) {
-      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-      if (!timedOut) throw error
-      result = await withDeadline(askLlm(message, config, { compact: true, screen }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
-      compactRecovery = true
+    if (screen) {
+      try {
+        result = await withDeadline(askLlm(message, config, { screen }), SCREENED_LLM_TIMEOUT_MS, 'Screened LLM request')
+      } catch (error) {
+        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+        if (!timedOut) throw error
+        return json({
+          ...screen,
+          comparison: buildComparison(screen),
+          mode: 'jev-screened',
+          jevEvaluated: true,
+          screening: 'jev-first',
+          llmStatus: 'timed_out_after_screen',
+          schema: typeSafeExample(screen, message),
+        })
+      }
+    } else {
+      try {
+        result = await withDeadline(askLlm(message, config), LLM_TIMEOUT_MS, 'LLM request')
+      } catch (error) {
+        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+        if (!timedOut) throw error
+        result = await withDeadline(askLlm(message, config, { compact: true }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
+        compactRecovery = true
+      }
     }
     const card = screen
       ? {
