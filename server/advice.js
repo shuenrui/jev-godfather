@@ -251,10 +251,20 @@ function buildComparison(card) {
     },
     speed: {
       status: 'not_measured',
+      unit: 'milliseconds per decision',
+      bars: [
+        { label: 'Without Jev', value: null, display: 'Awaiting paired run' },
+        { label: 'With Jev', value: null, display: 'Awaiting paired run' },
+      ],
       note: 'No paired benchmark is recorded for this request. Measure both paths on the same cases before claiming a speedup.',
     },
     cost: {
       status: 'not_measured',
+      unit: 'provider cost per decision',
+      bars: [
+        { label: 'Without Jev', value: null, display: 'Awaiting paired run' },
+        { label: 'With Jev', value: null, display: 'Awaiting paired run' },
+      ],
       note: 'Provider pricing and token usage are not available in this response. Do not claim a cost reduction without a paired run.',
     },
     evidence: 'Workflow is an architecture comparison; speed and cost require a paired benchmark.',

@@ -77,8 +77,18 @@ function fallbackComparison(advice) {
       label: 'With Jev',
       steps: ['Code assembles observable state and valid alternatives.', `Jev answers one bounded question: ${advice.decision}`, 'Code applies the threshold and verifies the outcome.'],
     },
-    speed: { note: 'No paired benchmark is recorded for this request.' },
-    cost: { note: 'Provider pricing and token usage are not available in this response.' },
+    speed: {
+      status: 'not_measured',
+      unit: 'milliseconds per decision',
+      bars: [{ label: 'Without Jev', display: 'Awaiting paired run' }, { label: 'With Jev', display: 'Awaiting paired run' }],
+      note: 'No paired benchmark is recorded for this request.',
+    },
+    cost: {
+      status: 'not_measured',
+      unit: 'provider cost per decision',
+      bars: [{ label: 'Without Jev', display: 'Awaiting paired run' }, { label: 'With Jev', display: 'Awaiting paired run' }],
+      note: 'Provider pricing and token usage are not available in this response.',
+    },
     evidence: 'Workflow is an architecture comparison; speed and cost require a paired benchmark.',
   }
 }
@@ -147,6 +157,27 @@ function RecommendationDetails({ advice }) {
   )
 }
 
+function ComparisonBars({ metric, title }) {
+  const bars = metric.bars || []
+  return (
+    <div className="comparison-chart">
+      <div className="chart-heading">
+        <div><span className="eyebrow">{title}</span><p>{metric.unit}</p></div>
+        <span className="chart-status">{metric.status === 'not_measured' ? 'NO PAIRED DATA' : 'MEASURED'}</span>
+      </div>
+      <div className="bar-chart" role="img" aria-label={`${title} comparison: paired benchmark required`}>
+        {bars.map((bar) => (
+          <div className="bar-row" key={bar.label}>
+            <span className="bar-label">{bar.label}</span>
+            <div className="bar-track"><span className="bar-empty">{bar.display}</span></div>
+          </div>
+        ))}
+      </div>
+      <p className="chart-note">{metric.note}</p>
+    </div>
+  )
+}
+
 function ComparisonReport({ comparison }) {
   if (!comparison) return null
 
@@ -160,26 +191,25 @@ function ComparisonReport({ comparison }) {
         <span className="comparison-note">Architecture view · not a benchmark</span>
       </div>
 
-      <div className="comparison-paths">
+      <div className="workflow-timeline" aria-label="Workflow timeline">
         {[comparison.withoutJev, comparison.withJev].map((path) => (
-          <div className={`comparison-path ${path.label === 'With Jev' ? 'with-jev' : ''}`} key={path.label}>
+          <div className={`timeline-track ${path.label === 'With Jev' ? 'with-jev' : ''}`} key={path.label}>
             <div className="path-heading"><span>{path.label}</span><span className="path-mark">{path.label === 'With Jev' ? 'BOUNDARY' : 'GENERAL'}</span></div>
-            <ol>{path.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+            <div className="timeline-steps">
+              {path.steps.map((step, index) => (
+                <div className="timeline-step" key={step}>
+                  <span className="timeline-node">{String(index + 1).padStart(2, '0')}</span>
+                  <p>{step}</p>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
 
-      <div className="metric-grid">
-        <div className="comparison-metric">
-          <span className="eyebrow">SPEED</span>
-          <strong>Not measured</strong>
-          <p>{comparison.speed.note}</p>
-        </div>
-        <div className="comparison-metric">
-          <span className="eyebrow">COST</span>
-          <strong>Not measured</strong>
-          <p>{comparison.cost.note}</p>
-        </div>
+      <div className="comparison-charts">
+        <ComparisonBars metric={comparison.speed} title="SPEED" />
+        <ComparisonBars metric={comparison.cost} title="COST" />
       </div>
 
       <p className="comparison-footnote">{comparison.evidence}</p>
