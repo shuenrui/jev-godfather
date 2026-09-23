@@ -3,23 +3,27 @@
 Jev Godfather is a focused advisor interface for turning a project idea into a
 clear, bounded decision that Jev can handle.
 
-Describe a project in plain language. The advisor returns whether Jev is a good
-fit, the exact bounded decision to give Jev, suggested `choice` / `score` /
-`noul` questions, implementation steps, and a ready-to-use TypeSafe request.
+Describe a project in plain language. The advisor proposes several materially
+different decision boundaries, asks Jev which one is actually bounded,
+observable, and repeated, then returns a sharp recommendation: what Jev owns,
+what code or a generative model must own, the input state, a starting policy,
+fallback behavior, missing evidence, and a ready-to-use TypeSafe request.
 
 ## Architecture
 
 ```text
 Browser  →  POST /api/advice
-              ├─ general LLM   (interprets the request, writes the explanation)
-              └─ TypeSafe/Jev  (optional: evaluates fit as a typed decision)
+              ├─ general LLM   (proposes 2–4 concrete decision boundaries)
+              ├─ TypeSafe/Jev  (selects and tests the strongest boundary)
+              └─ application   (applies fit, risk, and abstention policy)
 ```
 
 API keys live only on the server. The browser never receives them.
 
 - `LLM_API_KEY` unset → **demo mode**, local heuristic advice with a visible badge.
 - LLM configured, `TYPESAFE_API_KEY` unset → live advice from the LLM only.
-- Both configured → Jev evaluates fit and overrides the label, marked **Jev evaluated**.
+- Both configured → Jev selects among candidate boundaries and independently
+  judges whether the selected boundary is bounded, observable, and repeated.
 
 ## Using your own keys
 
@@ -69,10 +73,20 @@ Response:
 {
   "fit": "Strong fit",
   "fitClass": "green",
+  "verdict": "Use Jev",
+  "headline": "Use Jev to choose the owning support queue—not to write the reply.",
   "summary": "…",
   "decision": "Which team should handle this ticket?",
   "questionType": "choice",
   "choices": ["billing", "technical", "sales", "account"],
+  "stateFields": ["subject", "message_body", "customer_plan"],
+  "jevOwns": "Choose the owning queue and score explicit urgency.",
+  "codeOwns": "Apply overrides, assign the queue, and record outcomes.",
+  "avoid": "Do not ask Jev to compose the support reply.",
+  "threshold": "Starting policy: validate a threshold on historical tickets.",
+  "fallback": "Send uncertain or no-match cases to triage.",
+  "successTest": "Measure first-route accuracy and reassignment rate.",
+  "missingEvidence": ["Historical reassignment labels"],
   "steps": ["…"],
   "confidence": 0.91,
   "schema": { "model": "jev-latest", "state": { }, "questions": { } },
@@ -94,12 +108,13 @@ environment variables. The Vite plugin only wires it into `dev` and `preview`.
 
 The advisor should accept any plain-language project request and return:
 
-- Whether Jev is a good fit
-- The exact bounded decision to give Jev
-- Suggested choices, scores, or yes/no questions
-- Where Jev belongs in the architecture
-- Confidence and escalation rules
-- An example TypeSafe request
+- A decisive `use`, `use narrowly`, or `do not use yet` verdict
+- The exact bounded decision and the observable state it requires
+- Explicit ownership boundaries for Jev, code, and generative models
+- A starting threshold policy, fallback, and success test
+- Missing evidence that could change the recommendation
+- The closest proven Jev patterns and an example TypeSafe request
 
-The general LLM should handle open-ended interpretation and explanations. Jev
-should handle structured suitability and routing decisions.
+The general LLM proposes candidate boundaries. Jev judges the candidates. The
+application applies the policy. No model-generated latency, cost, accuracy, or
+coverage estimate is presented as measured evidence.

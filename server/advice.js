@@ -12,34 +12,44 @@ const FIT_LABELS = {
   'Poor fit': 'red',
 }
 
-const SYSTEM_PROMPT = `You are Jev Godfather, an advisor that determines how TypeSafe's Jev model could be used in a user's project. The user will describe a project or problem without asking any explicit question: always answer as if they asked "how should I use Jev here?"
+const SYSTEM_PROMPT = `You are Jev Godfather, a blunt decision-architecture advisor. The user describes a project or workflow. Your job is to locate the narrowest valuable decision that TypeSafe's Jev can own, or say that Jev should not be used yet.
 
 Jev is a System One typed-decision model. You send it a state plus typed questions (choice, score, noul) and it returns structured answers with probabilities and confidence. It does not generate free text.
 
-Strong fits: bounded answer spaces, frequent decisions, latency sensitivity, need for calibrated confidence, no free-text output needed. Proven patterns: spam and abuse gating, browser or desktop agent action decisions, LLM-as-judge replacement, model routing, code-review risk triage, lead scoring, content authenticity, MCP fact-check filtering, confidence-gated escalation, agent decision layers.
+Strong fits: bounded answer spaces, repeated decisions, observable input state, a useful confidence threshold, and outcomes that can be checked. Proven patterns: selecting browser actions from currently valid controls, context retention, model routing, code-review prioritisation, semantic CLI predicates, MCP judgment tools, agent completion checks, graph traversal, dataset filtering, and tactical decisions inside deterministic control loops.
 
 Poor fits: open-ended creative writing, long-horizon planning with deep branching (Jev's admitted weak spot), unbounded research, no enumerable answer space, no ground truth for evaluation, high-risk automation without human review.
 
-Keep a general LLM for open-ended reasoning, explanations, and unusual cases.
+Architecture rule: ordinary code observes state, validates candidates, executes actions, enforces permissions, and verifies outcomes. Jev only judges among bounded alternatives. A general LLM may interpret an open-ended request, generate text, explain results, and handle unusual cases.
+
+Do not write generic advice such as "use Jev for routing", "define a bounded answer space", "keep a human in the loop", or "start with conservative thresholds" unless you immediately specify the exact state, alternatives, threshold, fallback, and owner. Never invent measured latency, cost, accuracy, or calibration. If the request lacks a fact required for a sharp recommendation, name that fact under missingEvidence.
 
 Return ONLY valid JSON with exactly these keys:
 {
   "fit": "Strong fit" | "Promising fit" | "Poor fit",
-  "summary": string (1-2 sentences explaining where Jev fits or why it does not),
-  "decision": string (the exact bounded decision to give Jev, phrased as a question),
-  "questionType": "choice" | "score" | "noul",
-  "choices": string[] (2-6 finite options; for noul return ["true","false"]; for score return ordered low to high levels),
-  "steps": string[] (2-3 short implementation steps),
-  "confidence": number between 0 and 1,
-  "workflow": {
-    "without": [4 steps of handling ONE decision without Jev],
-    "with": [4 steps of handling the same decision with Jev as the gate]
-  }
+  "verdict": "Use Jev" | "Use Jev narrowly" | "Do not use Jev yet",
+  "headline": string (one decisive sentence naming the exact boundary),
+  "summary": string (2-3 specific sentences; include why this boundary is valuable),
+  "candidates": [
+    {
+      "decision": string (an exact bounded question),
+      "questionType": "choice" | "score" | "noul",
+      "choices": string[] (2-6 finite options),
+      "why": string (why this is a better boundary than adjacent work),
+      "stateFields": string[] (3-8 concrete fields available before the decision),
+      "jevOwns": string,
+      "codeOwns": string,
+      "avoid": string,
+      "threshold": string (a proposed policy labelled as a starting threshold, never a measured claim),
+      "fallback": string,
+      "successTest": string
+    }
+  ] (2-4 materially different candidate boundaries, best first),
+  "missingEvidence": string[] (0-4 facts that could change the recommendation),
+  "referencePatterns": string[] (1-3 closest patterns from the proven pattern list, with a one-line connection),
+  "steps": string[] (3 concrete implementation steps),
+  "confidence": number between 0 and 1
 }
-Each workflow step is {"label": at most 8 words, scenario-specific, "who": ..., "estMs": integer milliseconds}.
-For "without", who is one of "system" | "llm" | "human" and the track MUST include the full LLM call (who "llm") plus a human double-check (who "human").
-For "with", who is one of "system" | "jev" | "llm" and the track MUST include the Jev gate (who "jev") and, when escalation matters, a later low-confidence escalation step (who "llm").
-estMs realistic: system steps under 100, human review 30000-300000.
 No markdown, no comments, no text outside the JSON object.`
 
 function json(data, status = 200) {
@@ -58,6 +68,7 @@ function slug(value) {
 }
 
 function normalizeChoices(raw, questionType) {
+  if (questionType === 'noul') return ['true', 'false']
   const fallback = questionType === 'noul' ? ['true', 'false'] : questionType === 'score' ? ['low', 'medium', 'high'] : ['yes', 'no']
   if (!Array.isArray(raw)) return fallback
   const choices = raw
@@ -65,6 +76,34 @@ function normalizeChoices(raw, questionType) {
     .map((item) => item.trim())
     .slice(0, 6)
   return choices.length >= 2 ? choices : fallback
+}
+
+function cleanText(value, fallback, max = 500) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : fallback
+}
+
+function cleanList(raw, fallback = [], limit = 8) {
+  if (!Array.isArray(raw)) return fallback
+  const values = raw.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).slice(0, limit)
+  return values.length ? values : fallback
+}
+
+function normalizeCandidate(raw, index) {
+  const questionType = ['choice', 'score', 'noul'].includes(raw?.questionType) ? raw.questionType : 'choice'
+  return {
+    id: `boundary_${index + 1}`,
+    decision: cleanText(raw?.decision, 'Which valid next action should the system take?'),
+    questionType,
+    choices: normalizeChoices(raw?.choices, questionType),
+    why: cleanText(raw?.why, 'This isolates one repeated judgment while leaving observation, execution, and verification in deterministic code.'),
+    stateFields: cleanList(raw?.stateFields, ['current_state', 'valid_options', 'recent_outcome']),
+    jevOwns: cleanText(raw?.jevOwns, 'Select one bounded outcome and return its probability.'),
+    codeOwns: cleanText(raw?.codeOwns, 'Construct valid candidates, enforce hard rules, execute the result, and verify the outcome.'),
+    avoid: cleanText(raw?.avoid, 'Do not ask Jev to generate prose, invent actions, or bypass deterministic safety checks.'),
+    threshold: cleanText(raw?.threshold, 'Starting policy: auto-act only above a threshold chosen on a labelled validation set; otherwise escalate.'),
+    fallback: cleanText(raw?.fallback, 'On uncertainty or provider failure, preserve the current state and send the case to the existing fallback.'),
+    successTest: cleanText(raw?.successTest, 'Replay labelled cases and measure decision accuracy, abstention quality, and downstream task success.'),
+  }
 }
 
 function extractJson(text) {
@@ -77,9 +116,10 @@ function extractJson(text) {
 }
 
 function normalizeCard(raw) {
-  const questionType = ['choice', 'score', 'noul'].includes(raw?.questionType) ? raw.questionType : 'choice'
   const fit = Object.hasOwn(FIT_LABELS, raw?.fit) ? raw.fit : 'Promising fit'
-  const choices = normalizeChoices(raw?.choices, questionType)
+  const candidatesRaw = Array.isArray(raw?.candidates) ? raw.candidates.slice(0, 4) : []
+  const candidates = (candidatesRaw.length ? candidatesRaw : [raw]).map(normalizeCandidate)
+  const selected = candidates[0]
   const steps = Array.isArray(raw?.steps)
     ? raw.steps.filter((step) => typeof step === 'string' && step.trim()).map((step) => step.trim()).slice(0, 4)
     : []
@@ -88,16 +128,14 @@ function normalizeCard(raw) {
   return {
     fit,
     fitClass: FIT_LABELS[fit],
-    summary:
-      typeof raw?.summary === 'string' && raw.summary.trim()
-        ? raw.summary.trim()
-        : 'Jev could handle a bounded version of this decision. Define the answer space first, then keep a general LLM for everything open-ended.',
-    decision:
-      typeof raw?.decision === 'string' && raw.decision.trim()
-        ? raw.decision.trim()
-        : 'What repeated decision here can be expressed as a fixed set of choices?',
-    questionType,
-    choices,
+    verdict: ['Use Jev', 'Use Jev narrowly', 'Do not use Jev yet'].includes(raw?.verdict) ? raw.verdict : 'Use Jev narrowly',
+    headline: cleanText(raw?.headline, `Use Jev only for: ${selected.decision}`),
+    summary: cleanText(raw?.summary, selected.why, 900),
+    candidates,
+    selectedBoundaryId: selected.id,
+    ...selected,
+    missingEvidence: cleanList(raw?.missingEvidence, [], 4),
+    referencePatterns: cleanList(raw?.referencePatterns, [], 3),
     steps:
       steps.length >= 2
         ? steps
@@ -111,7 +149,10 @@ function normalizeCard(raw) {
 }
 
 function typeSafeExample(card, message) {
-  const state = { project_request: message.slice(0, 600) }
+  const state = Object.fromEntries(
+    (card.stateFields || ['project_request']).map((field) => [slug(field), `<${field}>`]),
+  )
+  state.project_request = message.slice(0, 600)
 
   let question
   if (card.questionType === 'noul') {
@@ -144,148 +185,6 @@ function sanitizeBaseUrl(raw, { strict }) {
     if (!strict || local) return value.replace(/\/$/, '')
   }
   return null
-}
-
-// USD per 1M tokens for known models (OpenCode Go docs); unknown models fall back to token counts.
-const PRICING = {
-  'glm-5.3-flash': { in: 0.15, out: 0.5 },
-  'mimo-v2.6-flash': { in: 0.14, out: 0.28 },
-  'mimo-v2.6-pro': { in: 0.435, out: 0.87 },
-  'mimo-v2.5': { in: 0.14, out: 0.28 },
-  'mimo-v2.5-pro': { in: 0.435, out: 0.87 },
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value))
-}
-
-function normalizeWorkflowSide(raw, allowed) {
-  if (!Array.isArray(raw)) return null
-  const steps = raw
-    .filter((step) => step && typeof step.label === 'string' && step.label.trim())
-    .slice(0, 5)
-    .map((step) => ({
-      label: step.label.trim().slice(0, 140),
-      who: allowed.includes(step.who) ? step.who : 'system',
-      estMs: Math.round(clamp(Number(step.estMs) || 0, 0, 600000)),
-      measured: false,
-    }))
-  return steps.length >= 3 ? steps : null
-}
-
-function fallbackWorkflowWithout() {
-  return [
-    { label: 'Receive raw request text', who: 'system', estMs: 1, measured: false },
-    { label: 'Stuff context into one large prompt', who: 'system', estMs: 50, measured: false },
-    { label: 'Full LLM call returns a prose answer', who: 'llm', estMs: 0, measured: false },
-    { label: 'Read the answer, no calibration', who: 'system', estMs: 10, measured: false },
-    { label: 'Human double-checks the output', who: 'human', estMs: 60000, measured: false },
-  ]
-}
-
-function fallbackWorkflowWith() {
-  return [
-    { label: 'Build typed state from the request', who: 'system', estMs: 5, measured: false },
-    { label: 'Jev gate answers the typed questions', who: 'jev', estMs: 0, measured: false },
-    { label: 'Return typed answer from distribution', who: 'jev', estMs: 10, measured: false },
-    { label: 'Escalate low-confidence cases to LLM', who: 'llm', estMs: 0, measured: false },
-  ]
-}
-
-function markMeasured(steps, who, ms) {
-  if (!steps || !Number.isFinite(ms)) return
-  let target = -1
-  let best = -1
-  for (let i = 0; i < steps.length; i += 1) {
-    if (steps[i].who === who && steps[i].estMs >= best) {
-      best = steps[i].estMs
-      target = i
-    }
-  }
-  if (target >= 0) {
-    steps[target].estMs = Math.round(ms)
-    steps[target].measured = true
-  }
-}
-
-function sanitizeProbabilities(raw) {
-  const pick = (key) => {
-    const value = Number(raw?.[key])
-    return Number.isFinite(value) && value >= 0 ? value : 0
-  }
-  let probs = { strong: pick('strong'), promising: pick('promising'), poor: pick('poor') }
-  const sum = probs.strong + probs.promising + probs.poor
-  if (sum > 0) {
-    probs = {
-      strong: probs.strong / sum,
-      promising: probs.promising / sum,
-      poor: probs.poor / sum,
-    }
-  } else {
-    probs = { strong: 1 / 3, promising: 1 / 3, poor: 1 / 3 }
-  }
-  return probs
-}
-
-function buildReport({ workflowRaw, llmMs, jevMs, usage, model, probabilities, llmConfidence, jevConfidence }) {
-  const without = normalizeWorkflowSide(workflowRaw?.without, ['system', 'llm', 'human']) || fallbackWorkflowWithout()
-  const withJev = normalizeWorkflowSide(workflowRaw?.with, ['system', 'jev', 'llm']) || fallbackWorkflowWith()
-
-  markMeasured(without, 'llm', llmMs)
-  markMeasured(withJev, 'jev', jevMs)
-  markMeasured(withJev, 'llm', llmMs)
-
-  const sumWhere = (steps, fn) => steps.filter(fn).reduce((total, step) => total + step.estMs, 0)
-  const withoutMs = sumWhere(without, (step) => step.who !== 'human')
-  const withFastMs = sumWhere(withJev, (step) => step.who !== 'llm')
-  const withEscalateMs = sumWhere(withJev, (step) => step.who === 'llm')
-
-  const probabilitiesClean = sanitizeProbabilities(probabilities)
-  const topProb = Math.max(probabilitiesClean.strong, probabilitiesClean.promising, probabilitiesClean.poor)
-  const escalateRate = clamp(1 - topProb, 0.05, 0.6)
-  const blendedMs = Math.round(withFastMs + escalateRate * withEscalateMs)
-
-  const tokens = usage
-    ? { in: Math.round(Number(usage.prompt_tokens) || 0), out: Math.round(Number(usage.completion_tokens) || 0) }
-    : null
-  const rate = PRICING[model]
-  let price
-  if (rate && tokens) {
-    const perCall = (tokens.in * rate.in) / 1e6 + (tokens.out * rate.out) / 1e6
-    price = {
-      known: true,
-      model,
-      tokens,
-      per1kWithout: Math.round(perCall * 1000 * 10000) / 10000,
-      per1kWith: Math.round(perCall * 1000 * escalateRate * 10000) / 10000,
-    }
-  } else {
-    price = { known: false, tokens }
-  }
-
-  return {
-    workflow: {
-      without,
-      with: withJev,
-      totals: { withoutMs, withFastMs, withBlendedMs: blendedMs },
-    },
-    speed: {
-      llmMs: Math.round(llmMs),
-      jevMs: Math.round(jevMs),
-      speedup: jevMs > 0 ? Math.round((llmMs / jevMs) * 10) / 10 : null,
-      blendedMs,
-    },
-    price,
-    coverage: {
-      autoPct: Math.round((1 - escalateRate) * 100),
-      escalatePct: Math.round(escalateRate * 100),
-      topProb: Math.round(topProb * 100) / 100,
-      escalateRate: Math.round(escalateRate * 100) / 100,
-      probabilities: probabilitiesClean,
-      llmConfidence: typeof llmConfidence === 'number' ? llmConfidence : null,
-      jevConfidence: typeof jevConfidence === 'number' ? jevConfidence : null,
-    },
-  }
 }
 
 // Per-request keys (from the user's browser) win over server env config.
@@ -342,8 +241,6 @@ async function askLlm(message, config) {
   const raw = extractJson(content)
   return {
     card: normalizeCard(raw),
-    usage: data?.usage && typeof data.usage === 'object' ? data.usage : null,
-    workflow: raw?.workflow && typeof raw.workflow === 'object' ? raw.workflow : null,
   }
 }
 
@@ -352,29 +249,47 @@ async function askJev(message, card, config) {
   if (!key) return null
   const baseUrl = config.typesafeBaseUrl
 
+  const candidateCriteria = Object.fromEntries([
+    ...card.candidates.map((candidate) => [
+      candidate.id,
+      `${candidate.decision} | state: ${candidate.stateFields.join(', ')} | Jev owns: ${candidate.jevOwns}`,
+    ]),
+    ['none', 'None of these is a sufficiently bounded, observable, repeated decision for Jev.'],
+  ])
+
+  const candidateQuestions = Object.fromEntries(
+    card.candidates.flatMap((candidate) => [
+      [`${candidate.id}_bounded`, {
+        type: 'noul',
+        instructions: `The decision "${candidate.decision}" has a finite answer space that contains the real operational outcomes, including a no-match or escalation path when needed.`,
+      }],
+      [`${candidate.id}_observable`, {
+        type: 'noul',
+        instructions: `The listed state fields are available before this decision and contain enough observable evidence to make it without inventing facts.`,
+      }],
+      [`${candidate.id}_repeated`, {
+        type: 'noul',
+        instructions: 'This exact judgment recurs often enough that a dedicated fast decision layer is more useful than handling it ad hoc.',
+      }],
+    ]),
+  )
+
   const body = {
     model: process.env.TYPESAFE_MODEL || 'jev-latest',
     state: JSON.stringify({
       project_request: message.slice(0, 1500),
-      proposed_decision: card.decision,
-      answer_space: card.choices,
+      candidate_boundaries: card.candidates,
     }),
     questions: {
-      fit: {
+      best_boundary: {
         type: 'choice',
-        criteria: {
-          strong: 'Jev is a strong fit: bounded, frequent, latency-sensitive decision with clear ground truth',
-          promising: 'Jev could help, but a general LLM must stay in the loop',
-          poor: 'Jev is a poor fit: open-ended, long-horizon, or unbounded output',
-        },
+        instructions: 'Which candidate is the sharpest useful boundary for Jev rather than ordinary code or a generative model?',
+        criteria: candidateCriteria,
       },
-      bounded: {
+      ...candidateQuestions,
+      high_consequence: {
         type: 'noul',
-        instructions: 'The answer space can be fully enumerated as choices, score levels, or a boolean.',
-      },
-      long_horizon: {
-        type: 'noul',
-        instructions: 'Success requires long-horizon multi-step planning or deep branching, where Jev is known to be weak.',
+        instructions: 'A wrong automatic decision here could directly cause irreversible, financial, safety, permission, privacy, or production harm.',
       },
     },
   }
@@ -388,35 +303,56 @@ async function askJev(message, card, config) {
 
   if (!response.ok) return null
   const data = await response.json()
-  const choice = data?.answers?.fit?.choice
+  const choice = data?.answers?.best_boundary?.choice
   if (!choice) return null
+
+  const metrics = Object.fromEntries(card.candidates.map((candidate) => [candidate.id, {
+    bounded: Number(data?.answers?.[`${candidate.id}_bounded`]?.noul ?? 0),
+    observable: Number(data?.answers?.[`${candidate.id}_observable`]?.noul ?? 0),
+    repeated: Number(data?.answers?.[`${candidate.id}_repeated`]?.noul ?? 0),
+  }]))
 
   return {
     choice,
-    bounded: Number(data?.answers?.bounded?.noul ?? 1),
-    longHorizon: Number(data?.answers?.long_horizon?.noul ?? 0),
-    confidence: Number(data?.answers?.fit?.confidence ?? 0) || null,
-    probabilities: data?.answers?.fit?.probabilities || null,
+    metrics,
+    highConsequence: Number(data?.answers?.high_consequence?.noul ?? 0),
+    confidence: Number(data?.answers?.best_boundary?.confidence ?? 0) || null,
+    probabilities: data?.answers?.best_boundary?.probabilities || null,
   }
 }
 
 function applyJev(card, jev) {
-  const labels = {
-    strong: ['Strong fit', 'green'],
-    promising: ['Promising fit', 'amber'],
-    poor: ['Poor fit', 'red'],
-  }
-  let [fit, fitClass] = labels[jev.choice] || [card.fit, card.fitClass]
-
-  if (jev.bounded < 0.4) {
-    fit = 'Poor fit'
-    fitClass = 'red'
-  } else if (jev.longHorizon > 0.6 && fitClass === 'green') {
-    fit = 'Promising fit'
-    fitClass = 'amber'
+  if (jev.choice === 'none') {
+    return {
+      ...card,
+      fit: 'Poor fit',
+      fitClass: 'red',
+      verdict: 'Do not use Jev yet',
+      headline: 'Do not add Jev until you can name a repeated decision with observable state and finite outcomes.',
+      confidence: jev.confidence ?? card.confidence,
+      selectionBasis: 'Jev rejected every proposed boundary.',
+    }
   }
 
-  return { ...card, fit, fitClass, confidence: jev.confidence ?? card.confidence }
+  const selected = card.candidates.find((candidate) => candidate.id === jev.choice) || card.candidates[0]
+  const metric = jev.metrics[selected.id] || { bounded: 0, observable: 0, repeated: 0 }
+  const weakest = Math.min(metric.bounded, metric.observable, metric.repeated)
+  const strong = weakest >= 0.6
+  const highConsequence = jev.highConsequence >= 0.6
+  const fit = strong ? (highConsequence ? 'Promising fit' : 'Strong fit') : 'Promising fit'
+  const verdict = strong && !highConsequence ? 'Use Jev' : 'Use Jev narrowly'
+
+  return {
+    ...card,
+    ...selected,
+    selectedBoundaryId: selected.id,
+    fit,
+    fitClass: FIT_LABELS[fit],
+    verdict,
+    headline: `${verdict} for this boundary: ${selected.decision}`,
+    confidence: jev.confidence ?? card.confidence,
+    selectionBasis: `bounded ${metric.bounded.toFixed(2)} · observable ${metric.observable.toFixed(2)} · repeated ${metric.repeated.toFixed(2)}${highConsequence ? ' · consequential action requires an external gate' : ''}`,
+  }
 }
 
 function demoCard(message) {
@@ -446,50 +382,25 @@ export async function adviceHandler(request) {
   }
 
   try {
-    const llmStarted = Date.now()
     const result = await askLlm(message, config)
-    const llmMs = Date.now() - llmStarted
     const card = result.card
-    const llmConfidence = card.confidence
-
     let jevEvaluated = false
-    let jevMs = 0
-    let probabilities = null
-    let jevConfidence = null
 
     try {
-      const jevStarted = Date.now()
       const jev = await askJev(message, card, config)
-      jevMs = Date.now() - jevStarted
       if (jev) {
         Object.assign(card, applyJev(card, jev))
         jevEvaluated = true
-        probabilities = jev.probabilities
-        jevConfidence = jev.confidence
       }
     } catch {
-      // Jev evaluation is optional; the LLM card still stands.
+      // Jev evaluation is optional; the LLM recommendation still stands.
     }
-
-    const report = jevEvaluated
-      ? buildReport({
-          workflowRaw: result.workflow,
-          llmMs,
-          jevMs,
-          usage: result.usage,
-          model: config.llmModel,
-          probabilities,
-          llmConfidence,
-          jevConfidence,
-        })
-      : null
 
     return json({
       ...card,
       mode: 'live',
       jevEvaluated,
       schema: typeSafeExample(card, message),
-      ...(report ? { report } : {}),
     })
   } catch (error) {
     const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
