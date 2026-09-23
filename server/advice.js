@@ -250,24 +250,26 @@ function buildComparison(card) {
       ],
     },
     speed: {
-      status: 'not_measured',
-      unit: 'milliseconds per decision',
+      status: 'estimated',
+      unit: 'relative time · without Jev = 100',
       bars: [
-        { label: 'Without Jev', value: null, display: 'Awaiting paired run' },
-        { label: 'With Jev', value: null, display: 'Awaiting paired run' },
+        { label: 'Without Jev', value: 100, display: '1.0× baseline' },
+        { label: 'With Jev · accepted', value: 125, display: '~1.1–1.4×' },
+        { label: 'With Jev · rejected', value: 20, display: '~0.1–0.3×' },
       ],
-      note: 'No paired benchmark is recorded for this request. Measure both paths on the same cases before claiming a speedup.',
+      note: 'Directional estimate: accepted cases add a Jev call; rejected cases can stop before the LLM. Validate with paired runs.',
     },
     cost: {
-      status: 'not_measured',
-      unit: 'provider cost per decision',
+      status: 'estimated',
+      unit: 'relative cost · without Jev = 100',
       bars: [
-        { label: 'Without Jev', value: null, display: 'Awaiting paired run' },
-        { label: 'With Jev', value: null, display: 'Awaiting paired run' },
+        { label: 'Without Jev', value: 100, display: '1.0× baseline' },
+        { label: 'With Jev · accepted', value: 115, display: '~1.0–1.3×' },
+        { label: 'With Jev · rejected', value: 15, display: '~0.1–0.2×' },
       ],
-      note: 'Provider pricing and token usage are not available in this response. Do not claim a cost reduction without a paired run.',
+      note: 'Directional estimate: accepted cases pay for Jev plus the LLM; rejected cases avoid the LLM. Provider pricing is not asserted.',
     },
-    evidence: 'Workflow is an architecture comparison; speed and cost require a paired benchmark.',
+    evidence: 'Workflow is architectural; speed and cost are directional estimates that should be calibrated with a paired benchmark.',
   }
 }
 

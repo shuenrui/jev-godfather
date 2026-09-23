@@ -70,8 +70,9 @@
 .bar-chart { display: grid; gap: 13px; margin-top: 18px; }
 .bar-row { display: grid; grid-template-columns: 75px 1fr; align-items: center; gap: 10px; }
 .bar-label { color: #aaa198; font: 10px 'DM Mono', monospace; }
-.bar-track { min-height: 26px; display: flex; align-items: center; border: 1px dashed rgba(203,166,110,.28); border-radius: 2px; }
-.bar-empty { padding: 0 9px; color: #8f877d; font: 9px 'DM Mono', monospace; }
+.bar-track { position: relative; min-height: 26px; display: flex; align-items: center; overflow: hidden; border: 1px solid rgba(203,166,110,.2); border-radius: 2px; background: #171613; }
+.bar-fill { position: absolute; inset: 0 auto 0 0; min-width: 4px; background: rgba(203,166,110,.23); }
+.bar-empty { position: relative; z-index: 1; padding: 0 9px; color: var(--cream); font: 9px 'DM Mono', monospace; }
 .chart-note { margin: 15px 0 0; color: #796f65; font: 10px/1.55 'DM Mono', monospace; }
 .comparison-footnote { margin: 14px 0 0; color: #796f65; font: 10px/1.5 'DM Mono', monospace; }
 .decision-block, .steps-block { padding: 17px 0; border-top: 1px solid var(--line); }.decision-block p { margin: 9px 0 12px; color: var(--cream); font: 500 17px/1.35 'Playfair Display', Georgia, serif; }

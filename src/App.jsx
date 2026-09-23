@@ -78,18 +78,18 @@ function fallbackComparison(advice) {
       steps: ['Code assembles observable state and valid alternatives.', `Jev answers one bounded question: ${advice.decision}`, 'Code applies the threshold and verifies the outcome.'],
     },
     speed: {
-      status: 'not_measured',
-      unit: 'milliseconds per decision',
-      bars: [{ label: 'Without Jev', display: 'Awaiting paired run' }, { label: 'With Jev', display: 'Awaiting paired run' }],
-      note: 'No paired benchmark is recorded for this request.',
+      status: 'estimated',
+      unit: 'relative time · without Jev = 100',
+      bars: [{ label: 'Without Jev', value: 100, display: '1.0× baseline' }, { label: 'With Jev · accepted', value: 125, display: '~1.1–1.4×' }, { label: 'With Jev · rejected', value: 20, display: '~0.1–0.3×' }],
+      note: 'Directional estimate; validate with paired runs.',
     },
     cost: {
-      status: 'not_measured',
-      unit: 'provider cost per decision',
-      bars: [{ label: 'Without Jev', display: 'Awaiting paired run' }, { label: 'With Jev', display: 'Awaiting paired run' }],
-      note: 'Provider pricing and token usage are not available in this response.',
+      status: 'estimated',
+      unit: 'relative cost · without Jev = 100',
+      bars: [{ label: 'Without Jev', value: 100, display: '1.0× baseline' }, { label: 'With Jev · accepted', value: 115, display: '~1.0–1.3×' }, { label: 'With Jev · rejected', value: 15, display: '~0.1–0.2×' }],
+      note: 'Directional estimate; provider pricing is not asserted.',
     },
-    evidence: 'Workflow is an architecture comparison; speed and cost require a paired benchmark.',
+    evidence: 'Workflow is architectural; speed and cost are directional estimates that should be calibrated with a paired benchmark.',
   }
 }
 
@@ -163,13 +163,13 @@ function ComparisonBars({ metric, title }) {
     <div className="comparison-chart">
       <div className="chart-heading">
         <div><span className="eyebrow">{title}</span><p>{metric.unit}</p></div>
-        <span className="chart-status">{metric.status === 'not_measured' ? 'NO PAIRED DATA' : 'MEASURED'}</span>
+        <span className="chart-status">{metric.status === 'estimated' ? 'ESTIMATE' : metric.status === 'not_measured' ? 'NO PAIRED DATA' : 'MEASURED'}</span>
       </div>
       <div className="bar-chart" role="img" aria-label={`${title} comparison: paired benchmark required`}>
         {bars.map((bar) => (
           <div className="bar-row" key={bar.label}>
             <span className="bar-label">{bar.label}</span>
-            <div className="bar-track"><span className="bar-empty">{bar.display}</span></div>
+              <div className="bar-track"><span className="bar-fill" style={{ width: `${bar.value || 0}%` }} /><span className="bar-empty">{bar.display}</span></div>
           </div>
         ))}
       </div>
