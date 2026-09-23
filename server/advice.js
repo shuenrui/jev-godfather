@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto'
 import { pickAdvice } from '../src/adviceLibrary.js'
 
 const LLM_TIMEOUT_MS = 30000
 const JEV_TIMEOUT_MS = 10000
+const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
   'Strong fit': 'green',
@@ -160,10 +162,17 @@ function readConfig(request) {
 
 async function askLlm(message, config) {
   const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
+  // OpenCode Go rejects requests without a session id; hash keeps it stable per message.
+  const session = createHash('sha256').update(message).digest('hex').slice(0, 64)
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'User-Agent': USER_AGENT,
+      'x-opencode-session': session,
+    },
     body: JSON.stringify({
       model,
       temperature: 0.2,
