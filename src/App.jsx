@@ -58,6 +58,7 @@ function KeyIcon() {
 
 function modeNote(advice, hasOwnKey) {
   if (advice.mode === 'demo') return 'Demo response · add your LLM key in Keys'
+  if (advice.mode === 'degraded') return `Bounded fallback · ${advice.error || 'live advisor timed out'}`
   if (advice.mode === 'offline') return `Offline fallback · ${advice.error || 'advisor unreachable'}`
   const parts = []
   if (advice.jevEvaluated) parts.push('Jev evaluated')

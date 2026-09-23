@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { pickAdvice } from '../src/adviceLibrary.js'
 
-// Budget must fit inside the edge gateway's ~60s cap: worst case = llm + jev + overhead < 60s.
-const LLM_TIMEOUT_MS = 52000
+// Keep the browser request bounded. The provider can be slow, but a 52s timeout
+// leaves the user with a generic fallback and no useful recovery path.
+const LLM_TIMEOUT_MS = 38000
 const JEV_TIMEOUT_MS = 5000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
@@ -44,7 +45,7 @@ Return ONLY valid JSON with exactly these keys:
       "fallback": string,
       "successTest": string
     }
-  ] (2-4 materially different candidate boundaries, best first),
+  ] (2-3 materially different candidate boundaries, best first),
   "missingEvidence": string[] (0-4 facts that could change the recommendation),
   "referencePatterns": string[] (1-3 closest patterns from the proven pattern list, with a one-line connection),
   "steps": string[] (3 concrete implementation steps),
@@ -230,6 +231,7 @@ async function askLlm(message, config) {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: message.slice(0, 4000) },
       ],
+      max_tokens: 2200,
     }),
     signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
   })
@@ -360,6 +362,16 @@ function demoCard(message) {
   return { ...card, mode: 'demo', jevEvaluated: false }
 }
 
+function degradedCard(message, error) {
+  const card = { ...pickAdvice(message) }
+  return {
+    ...card,
+    mode: 'degraded',
+    jevEvaluated: false,
+    error: `Live advisor timed out; showing a bounded starting pattern instead. ${error}`,
+  }
+}
+
 export async function adviceHandler(request) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
@@ -407,6 +419,6 @@ export async function adviceHandler(request) {
     const detail = timedOut
       ? `the LLM did not answer within ${LLM_TIMEOUT_MS / 1000}s — please try again`
       : error?.message || error
-    return json({ error: `Advisor request failed: ${detail}` }, 502)
+    return json(degradedCard(message, detail), 200)
   }
 }

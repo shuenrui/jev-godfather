@@ -108,10 +108,36 @@ const advice = {
     ],
     confidence: null,
   },
+  frontend: {
+    fit: 'Promising fit',
+    fitClass: 'amber',
+    verdict: 'Use Jev narrowly',
+    headline: 'Use Jev to choose the next design-quality gate—not to design the interface.',
+    summary: 'For a frontend-design pipeline, Jev is useful after the agent has a concrete change and a finite set of checks. It can select whether the next gate is accessibility, responsive behavior, interaction state, visual polish, or human review; it should not invent the visual direction or replace browser verification.',
+    decision: 'Which design-quality gate should run next for this frontend change?',
+    questionType: 'choice',
+    choices: ['accessibility', 'responsive', 'interaction', 'visual_polish', 'human_review'],
+    stateFields: ['changed_surface', 'user_goal', 'viewport_states', 'interaction_states', 'known_constraints', 'diff_summary'],
+    jevOwns: 'Select the next bounded review gate from the checks the pipeline supports.',
+    codeOwns: 'Build the candidate gate list, run the selected check, capture browser evidence, and block release on hard failures.',
+    avoid: 'Do not ask Jev to choose the brand direction, write CSS, judge an unrendered mockup, or declare the site finished without browser evidence.',
+    threshold: 'Starting policy: auto-select a gate only above 0.8 confidence; otherwise run the required accessibility and responsive checks plus human review.',
+    fallback: 'If Jev is uncertain or unavailable, run the deterministic baseline checks and escalate the design decision to the agent or reviewer.',
+    successTest: 'Replay labelled frontend changes and compare Jev-selected gates with reviewer-identified defects and post-build browser failures.',
+    missingEvidence: ['The pipeline’s actual gate catalog and hard-failure rules.', 'A labelled set of frontend changes showing which gate found the defect.', 'Browser screenshots or runtime checks for the changed surface.'],
+    referencePatterns: ['Jev Review: use typed judgments to prioritise review attention, not to claim correctness.', 'Jev Ultrafast: observe the current structured state, choose from valid actions, then verify the result.', 'json-render: constrain generated UI to a known component and state catalog.'],
+    steps: [
+      'Represent the changed surface, user goal, viewport states, and interaction states as structured input.',
+      'Ask Jev to choose one supported review gate, with human-review as an explicit option.',
+      'Run the gate in the browser and keep the release blocked until its evidence is recorded.',
+    ],
+    confidence: null,
+  },
 }
 
 export function pickAdvice(text) {
   const normalized = String(text || '').toLowerCase()
+  if (normalized.includes('frontend') || normalized.includes('design pipeline') || normalized.includes('ui') || normalized.includes('website')) return advice.frontend
   if (normalized.includes('support') || normalized.includes('ticket')) return advice.support
   if (normalized.includes('safe') || normalized.includes('command') || normalized.includes('terminal'))
     return advice.safety
