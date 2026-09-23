@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { pickAdvice } from '../src/adviceLibrary.js'
 
-// Keep the browser request bounded. The provider can be slow, but a 52s timeout
-// leaves the user with a generic fallback and no useful recovery path.
-const LLM_TIMEOUT_MS = 38000
+// Keep enough budget for a compact recovery pass plus the optional Jev call.
+const LLM_TIMEOUT_MS = 30000
+const COMPACT_LLM_TIMEOUT_MS = 18000
 const JEV_TIMEOUT_MS = 5000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
@@ -52,6 +52,37 @@ Return ONLY valid JSON with exactly these keys:
   "confidence": number between 0 and 1
 }
 No markdown, no comments, no text outside the JSON object.`
+
+const COMPACT_SYSTEM_PROMPT = `You are Jev Godfather. Return a concise JSON recommendation for how Jev should be used in the user's project.
+
+Jev only chooses among finite alternatives or answers a narrow yes/no or score question. Code must own observation, candidate validation, permissions, execution, and verification. A general LLM owns open-ended explanation and generation. Be decisive and specific; do not invent measured performance claims.
+
+Return ONLY valid JSON with exactly these keys:
+{
+  "fit": "Strong fit" | "Promising fit" | "Poor fit",
+  "verdict": "Use Jev" | "Use Jev narrowly" | "Do not use Jev yet",
+  "headline": string,
+  "summary": string,
+  "candidates": [{
+    "decision": string,
+    "questionType": "choice" | "score" | "noul",
+    "choices": string[],
+    "why": string,
+    "stateFields": string[],
+    "jevOwns": string,
+    "codeOwns": string,
+    "avoid": string,
+    "threshold": string,
+    "fallback": string,
+    "successTest": string
+  }],
+  "missingEvidence": string[],
+  "referencePatterns": string[],
+  "steps": string[],
+  "confidence": number
+}
+
+Return one or two candidate boundaries. Keep every string short and operational. No markdown or text outside JSON.`
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -211,7 +242,7 @@ function readConfig(request) {
   }
 }
 
-async function askLlm(message, config) {
+async function askLlm(message, config, { compact = false } = {}) {
   const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
   // OpenCode Go rejects requests without a session id; hash keeps it stable per message.
   const session = createHash('sha256').update(message).digest('hex').slice(0, 64)
@@ -228,12 +259,12 @@ async function askLlm(message, config) {
       model,
       temperature: 0.2,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: compact ? COMPACT_SYSTEM_PROMPT : SYSTEM_PROMPT },
         { role: 'user', content: message.slice(0, 4000) },
       ],
-      max_tokens: 2200,
+      max_tokens: compact ? 1200 : 1800,
     }),
-    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+    signal: AbortSignal.timeout(compact ? COMPACT_LLM_TIMEOUT_MS : LLM_TIMEOUT_MS),
   })
 
   if (!response.ok) throw new Error(`LLM returned HTTP ${response.status}`)
@@ -394,7 +425,16 @@ export async function adviceHandler(request) {
   }
 
   try {
-    const result = await askLlm(message, config)
+    let result
+    let compactRecovery = false
+    try {
+      result = await askLlm(message, config)
+    } catch (error) {
+      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+      if (!timedOut) throw error
+      result = await askLlm(message, config, { compact: true })
+      compactRecovery = true
+    }
     const card = result.card
     let jevEvaluated = false
 
@@ -410,14 +450,14 @@ export async function adviceHandler(request) {
 
     return json({
       ...card,
-      mode: 'live',
+      mode: compactRecovery ? 'live-compact' : 'live',
       jevEvaluated,
       schema: typeSafeExample(card, message),
     })
   } catch (error) {
     const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
     const detail = timedOut
-      ? `the LLM did not answer within ${LLM_TIMEOUT_MS / 1000}s — please try again`
+      ? `the LLM and compact recovery pass did not answer within the release budget — please try again`
       : error?.message || error
     return json(degradedCard(message, detail), 200)
   }
