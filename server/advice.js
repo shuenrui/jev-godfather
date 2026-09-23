@@ -93,6 +93,18 @@ function json(data, status = 200) {
   })
 }
 
+function withDeadline(promise, milliseconds, label) {
+  let timer
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label} exceeded ${milliseconds}ms`)
+      error.name = 'TimeoutError'
+      reject(error)
+    }, milliseconds)
+  })
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
+}
+
 function slug(value) {
   return String(value)
     .toLowerCase()
@@ -462,11 +474,11 @@ export async function adviceHandler(request) {
     let result
     let compactRecovery = false
     try {
-      result = await askLlm(message, config)
+      result = await withDeadline(askLlm(message, config), LLM_TIMEOUT_MS, 'LLM request')
     } catch (error) {
       const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
       if (!timedOut) throw error
-      result = await askLlm(message, config, { compact: true })
+      result = await withDeadline(askLlm(message, config, { compact: true }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
       compactRecovery = true
     }
     const card = result.card
