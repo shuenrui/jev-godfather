@@ -202,6 +202,37 @@ function typeSafeExample(card, message) {
   return { model: 'jev-latest', state, questions: { decision: question } }
 }
 
+function buildComparison(card) {
+  return {
+    decision: card.decision,
+    withoutJev: {
+      label: 'Without Jev',
+      steps: [
+        'General LLM interprets the request and picks a direction.',
+        'The workflow and decision policy stay implicit in the response.',
+        'A human or downstream code checks whether the result is usable.',
+      ],
+    },
+    withJev: {
+      label: 'With Jev',
+      steps: [
+        'Code assembles observable state and valid alternatives.',
+        `Jev answers one bounded question: ${card.decision}`,
+        'Code applies the threshold, executes, and verifies the outcome.',
+      ],
+    },
+    speed: {
+      status: 'not_measured',
+      note: 'No paired benchmark is recorded for this request. Measure both paths on the same cases before claiming a speedup.',
+    },
+    cost: {
+      status: 'not_measured',
+      note: 'Provider pricing and token usage are not available in this response. Do not claim a cost reduction without a paired run.',
+    },
+    evidence: 'Workflow is an architecture comparison; speed and cost require a paired benchmark.',
+  }
+}
+
 function sanitizeBaseUrl(raw, { strict }) {
   const value = String(raw || '').trim().slice(0, 512)
   if (!value) return null
@@ -390,13 +421,14 @@ function applyJev(card, jev) {
 
 function demoCard(message) {
   const card = { ...pickAdvice(message) }
-  return { ...card, mode: 'demo', jevEvaluated: false }
+  return { ...card, comparison: buildComparison(card), mode: 'demo', jevEvaluated: false }
 }
 
 function degradedCard(message, error) {
   const card = { ...pickAdvice(message) }
   return {
     ...card,
+    comparison: buildComparison(card),
     mode: 'degraded',
     jevEvaluated: false,
     error: `Live advisor timed out; showing a bounded starting pattern instead. ${error}`,
@@ -450,6 +482,7 @@ export async function adviceHandler(request) {
 
     return json({
       ...card,
+      comparison: buildComparison(card),
       mode: compactRecovery ? 'live-compact' : 'live',
       jevEvaluated,
       schema: typeSafeExample(card, message),

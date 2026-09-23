@@ -67,6 +67,22 @@ function modeNote(advice, hasOwnKey) {
   return parts.length ? parts.join(' · ') : null
 }
 
+function fallbackComparison(advice) {
+  return {
+    withoutJev: {
+      label: 'Without Jev',
+      steps: ['General LLM interprets the request and picks a direction.', 'The policy stays implicit in the response.', 'A human or code path checks the result.'],
+    },
+    withJev: {
+      label: 'With Jev',
+      steps: ['Code assembles observable state and valid alternatives.', `Jev answers one bounded question: ${advice.decision}`, 'Code applies the threshold and verifies the outcome.'],
+    },
+    speed: { note: 'No paired benchmark is recorded for this request.' },
+    cost: { note: 'Provider pricing and token usage are not available in this response.' },
+    evidence: 'Workflow is an architecture comparison; speed and cost require a paired benchmark.',
+  }
+}
+
 function RecommendationDetails({ advice }) {
   if (!advice.jevOwns) return null
 
@@ -127,6 +143,46 @@ function RecommendationDetails({ advice }) {
           )}
         </div>
       )}
+    </section>
+  )
+}
+
+function ComparisonReport({ comparison }) {
+  if (!comparison) return null
+
+  return (
+    <section className="comparison-report" aria-label="Without Jev versus with Jev">
+      <div className="comparison-head">
+        <div>
+          <span className="eyebrow">THE COMPARISON</span>
+          <h2>Same decision, two paths</h2>
+        </div>
+        <span className="comparison-note">Architecture view · not a benchmark</span>
+      </div>
+
+      <div className="comparison-paths">
+        {[comparison.withoutJev, comparison.withJev].map((path) => (
+          <div className={`comparison-path ${path.label === 'With Jev' ? 'with-jev' : ''}`} key={path.label}>
+            <div className="path-heading"><span>{path.label}</span><span className="path-mark">{path.label === 'With Jev' ? 'BOUNDARY' : 'GENERAL'}</span></div>
+            <ol>{path.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+          </div>
+        ))}
+      </div>
+
+      <div className="metric-grid">
+        <div className="comparison-metric">
+          <span className="eyebrow">SPEED</span>
+          <strong>Not measured</strong>
+          <p>{comparison.speed.note}</p>
+        </div>
+        <div className="comparison-metric">
+          <span className="eyebrow">COST</span>
+          <strong>Not measured</strong>
+          <p>{comparison.cost.note}</p>
+        </div>
+      </div>
+
+      <p className="comparison-footnote">{comparison.evidence}</p>
     </section>
   )
 }
@@ -343,6 +399,7 @@ function App() {
                       </span>
                     </div>
                     <p className="summary">{message.advice.summary}</p>
+                    <ComparisonReport comparison={message.advice.comparison || fallbackComparison(message.advice)} />
                     <div className="decision-block">
                       <span className="eyebrow">THE DECISION · {message.advice.questionType || 'choice'}</span>
                       <p>{message.advice.decision}</p>

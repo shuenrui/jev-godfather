@@ -48,6 +48,21 @@
 .fit-pill.green { color: #9ec9a0; background: rgba(127,168,129,.12); }.fit-pill.amber { color: var(--gold); background: rgba(203,166,110,.12); }
 .confidence { color: var(--faint); font: 10px 'DM Mono', monospace; }
 .summary { max-width: 600px; margin: 17px 0 24px; color: #c3bbb1; font-size: 13px; line-height: 1.7; }
+.comparison-report { margin: 0 0 8px; padding: 18px 0 19px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.comparison-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.comparison-head h2 { margin: 8px 0 0; color: var(--cream); font: 500 21px/1.15 'Playfair Display', Georgia, serif; }
+.comparison-note, .path-mark { color: var(--faint); font: 9px 'DM Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }
+.comparison-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.comparison-path { min-height: 176px; padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: #191815; }
+.comparison-path.with-jev { border-color: rgba(203,166,110,.34); background: rgba(203,166,110,.045); }
+.path-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--cream); font: 500 14px 'Playfair Display', Georgia, serif; }
+.comparison-path ol { margin: 14px 0 0; padding-left: 17px; color: #aaa198; font-size: 11px; line-height: 1.55; }
+.comparison-path li { margin: 8px 0; padding-left: 3px; }
+.metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.comparison-metric { padding: 14px; border-top: 1px solid var(--line); background: rgba(255,255,255,.015); }
+.comparison-metric strong { display: block; margin-top: 9px; color: var(--gold); font: 500 17px 'Playfair Display', Georgia, serif; }
+.comparison-metric p { margin: 7px 0 0; color: #8f877d; font: 10px/1.55 'DM Mono', monospace; }
+.comparison-footnote { margin: 14px 0 0; color: #796f65; font: 10px/1.5 'DM Mono', monospace; }
 .decision-block, .steps-block { padding: 17px 0; border-top: 1px solid var(--line); }.decision-block p { margin: 9px 0 12px; color: var(--cream); font: 500 17px/1.35 'Playfair Display', Georgia, serif; }
 .choice-row { display: flex; flex-wrap: wrap; gap: 6px; }.choice-row span { padding: 5px 8px; border: 1px solid var(--line); border-radius: 3px; color: #9e968b; font: 10px 'DM Mono', monospace; }
 .steps-block ol { margin: 12px 0 0; padding-left: 18px; color: #aaa198; font-size: 12px; line-height: 1.65; }.steps-block li { padding-left: 6px; margin: 7px 0; }
