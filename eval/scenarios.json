@@ -1,0 +1,89 @@
+{
+  "$comment": "Labelled advisor scenarios. expect = verdict bucket the boundary deserves; acceptable = buckets that count as correct. Buckets: use | narrow | avoid, mapped from 'Use Jev' / 'Use Jev narrowly' / 'Do not use Jev yet'.",
+  "scenarios": [
+    {
+      "id": "support-triage",
+      "category": "routing",
+      "message": "We get 800 support tickets a week and a human currently decides which queue each one goes to: billing, technical, sales, or account management. I want to cut first-response time.",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "cli-safety-predicate",
+      "category": "safety",
+      "message": "Our coding agent runs shell commands and I want a check that decides, before execution, whether each command is destructive enough to require human approval (rm -rf, force push, dropping tables, editing credentials).",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "model-routing",
+      "category": "routing",
+      "message": "Every request to our assistant could be handled by one of three fixed models: a cheap fast one, a strong expensive one, or a vision-capable one. I want automatic per-request selection to cut spend.",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "frontend-review-gate",
+      "category": "process",
+      "message": "After each LLM-generated frontend change, our team reviews accessibility, responsive behavior, interaction polish, and visual design, but reviewers do them in random order and miss things. I want to pick which review gate runs next for each change.",
+      "expect": "narrow",
+      "acceptable": ["narrow", "use"]
+    },
+    {
+      "id": "browser-action-picker",
+      "category": "agent-control",
+      "message": "A browser automation agent snapshots the current page and gets a list of the controls that are actually enabled right now (buttons, fields, toggles). Each step it must pick exactly one control to interact with.",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "review-prioritisation",
+      "category": "code-review",
+      "message": "CI produces 40-60 code review comments per PR and engineers only read the top few. I want each comment scored as must-fix, nice-to-have, or ignore so the list can be auto-triaged.",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "novel-writing",
+      "category": "generation",
+      "message": "I want an app that writes full fantasy novels for me — plot, characters, prose — and can produce a new one every week.",
+      "expect": "avoid",
+      "acceptable": ["avoid", "narrow"]
+    },
+    {
+      "id": "market-research",
+      "category": "research",
+      "message": "Build me a research agent that reads the whole internet and produces an open-ended competitive analysis of the EV market, deciding its own follow-up questions as it goes.",
+      "expect": "avoid",
+      "acceptable": ["avoid"]
+    },
+    {
+      "id": "strategy-planning",
+      "category": "planning",
+      "message": "I want AI help planning our company's three-year strategy: entering new markets, hiring plans, product roadmap, and pricing, with the plan revised every month as assumptions change.",
+      "expect": "avoid",
+      "acceptable": ["avoid"]
+    },
+    {
+      "id": "design-system-invention",
+      "category": "generation",
+      "message": "Give me a tool that invents a completely new visual design language for my brand — colors, typography, components, motion — something no one has seen before.",
+      "expect": "avoid",
+      "acceptable": ["avoid", "narrow"]
+    },
+    {
+      "id": "vague-team-helper",
+      "category": "underspecified",
+      "message": "We want an AI helper for our team, like it should make us faster at stuff, maybe answer questions and do some automation.",
+      "expect": "narrow",
+      "acceptable": ["narrow", "avoid"]
+    },
+    {
+      "id": "autonomous-trading",
+      "category": "high-consequence",
+      "message": "A bot that watches my broker portfolio screen and, for each of my five configured strategies, decides buy / hold / sell in real time and places the order automatically without review.",
+      "expect": "narrow",
+      "acceptable": ["narrow", "avoid"]
+    }
+  ]
+}
