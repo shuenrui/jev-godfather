@@ -5,7 +5,8 @@ narrow, bounded, testable decision that Jev can own. It does not let Jev design
 products, write arbitrary prose, execute actions, or replace a general LLM — it
 decides whether a project has a useful place for Jev at all.
 
-Live site: <https://jev-godfather.fly.dev>
+Live site: <https://jev-godfather.innstance.app>
+(`https://jev-godfather.fly.dev` now redirects here.)
 
 ## Architecture
 
@@ -172,7 +173,8 @@ npm run build && node server/index.js   # production server (:8080)
 ## Deployment
 
 Target: ifhost / Innstance, app `jev-godfather`, public URL
-<https://jev-godfather.fly.dev>. `deploy.sh` uploads `dist/`, `server/`,
+<https://jev-godfather.innstance.app> (the legacy `…fly.dev` hostname
+308-redirects to it). `deploy.sh` uploads `dist/`, `server/`,
 `src/adviceLibrary.js`, and `package.json`; the live process runs
 `node server/index.js`. The handler is also wired into `vite dev`/`preview` by
 `vite.config.js`, so it can be wrapped for any host that accepts a
