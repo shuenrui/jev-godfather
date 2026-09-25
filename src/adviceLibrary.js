@@ -137,7 +137,8 @@ const advice = {
 
 export function pickAdvice(text) {
   const normalized = String(text || '').toLowerCase()
-  if (normalized.includes('frontend') || normalized.includes('design pipeline') || normalized.includes('ui') || normalized.includes('website')) return advice.frontend
+  // 'ui' must be a whole word — "building" and "quickly" contain the substring.
+  if (/\bui\b/.test(normalized) || normalized.includes('frontend') || normalized.includes('design pipeline') || normalized.includes('website')) return advice.frontend
   if (normalized.includes('support') || normalized.includes('ticket')) return advice.support
   if (normalized.includes('safe') || normalized.includes('command') || normalized.includes('terminal'))
     return advice.safety
