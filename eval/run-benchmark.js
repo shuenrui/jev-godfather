@@ -92,6 +92,36 @@ globalThis.fetch = async (input, init) => {
 
 // ---- single run -------------------------------------------------------------
 
+async function readResultEvent(response) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result = null
+  let stageCount = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let newline
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline).trim()
+      buffer = buffer.slice(newline + 1)
+      if (!line) continue
+      let event = null
+      try {
+        event = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (event?.type === 'result') result = event
+      else if (event?.type === 'stage') stageCount += 1
+    }
+  }
+  if (!result) throw new Error('advisor stream ended without a result')
+  const { type: _type, ...payload } = result
+  return { payload, stageCount }
+}
+
 async function runOnce(message, arm) {
   const savedTypesafe = process.env.TYPESAFE_API_KEY
   if (arm === 'llm-only') delete process.env.TYPESAFE_API_KEY
@@ -104,7 +134,14 @@ async function runOnce(message, arm) {
       body: JSON.stringify({ message }),
     })
     const response = await adviceHandler(request)
-    const card = await response.json()
+    const contentType = response.headers.get('content-type') || ''
+    let card
+    let stageCount = 0
+    if (contentType.includes('x-ndjson')) {
+      ;({ payload: card, stageCount } = await readResultEvent(response))
+    } else {
+      card = await response.json()
+    }
     return {
       arm,
       wallMs: Math.round(performance.now() - started),
@@ -112,6 +149,9 @@ async function runOnce(message, arm) {
       mode: card?.mode ?? null,
       screening: card?.screening ?? null,
       jevEvaluated: Boolean(card?.jevEvaluated),
+      decomposition: card?.decomposition?.status ?? null,
+      decompositionSteps: card?.decomposition?.steps?.length ?? 0,
+      stageCount,
       verdict: card?.verdict ?? null,
       fit: card?.fit ?? null,
       decision: card?.decision ?? null,
@@ -183,9 +223,15 @@ function summarizeArm(runs, scenariosById) {
     confusion[scenario.expect][s.bucket] += 1
   }
   const walls = runs.map((r) => r.wallMs)
+  const decompositionCounts = runs.reduce((acc, r) => {
+    const key = r.decomposition ?? 'none'
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
   return {
     runs: runs.length,
     liveRuns: live.length,
+    decompositionCounts,
     modeCounts: runs.reduce((acc, r) => ({ ...acc, [r.mode ?? 'unknown']: (acc[r.mode ?? 'unknown'] || 0) + 1 }), {}),
     wallMs: { p50: percentile(walls, 50), p95: percentile(walls, 95), max: walls.length ? Math.max(...walls) : null },
     llm: {
@@ -305,6 +351,7 @@ async function main() {
     console.log(`  wall p50/p95/max: ${s.wallMs.p50}/${s.wallMs.p95}/${s.wallMs.max} ms`)
     console.log(`  llm: ${s.llm.calls} calls, tokens ${s.llm.totalTokens ?? 'n/a'} (prompt ${s.llm.promptTokens ?? 'n/a'} / completion ${s.llm.completionTokens ?? 'n/a'})`)
     console.log(`  jev: ${s.jev.calls} calls, p50 ${s.jev.p50Ms ?? 'n/a'} ms`)
+    console.log(`  decomposition: ${JSON.stringify(s.decompositionCounts)}`)
     if (s.quality) {
       console.log(`  verdict accuracy: exact ${(s.quality.exactAccuracy * 100).toFixed(0)}% · acceptable ${(s.quality.acceptableAccuracy * 100).toFixed(0)}%`)
       console.log(`  false-Jev rate ${(s.quality.falseJevRate * 100).toFixed(0)}% · over-reject rate ${(s.quality.overRejectRate * 100).toFixed(0)}%`)

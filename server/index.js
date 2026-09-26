@@ -77,7 +77,14 @@ const server = createServer(async (req, res) => {
       })
 
       const response = await adviceHandler(request)
+      const contentType = response.headers.get('content-type') || ''
       res.writeHead(response.status, Object.fromEntries(response.headers))
+      if (contentType.includes('x-ndjson') && response.body) {
+        res.flushHeaders()
+        for await (const chunk of response.body) res.write(chunk)
+        res.end()
+        return
+      }
       res.end(await response.text())
       return
     }

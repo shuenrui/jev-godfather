@@ -84,6 +84,27 @@
       "message": "A bot that watches my broker portfolio screen and, for each of my five configured strategies, decides buy / hold / sell in real time and places the order automatically without review.",
       "expect": "narrow",
       "acceptable": ["narrow", "avoid"]
+    },
+    {
+      "id": "inbox-classifier",
+      "category": "classification",
+      "message": "I want a bot that reads my inbox and decides for each arriving email whether it is a client escalation, a normal request, spam, or needs my boss — the four labels are fixed and my assistant already sorts them this way every day.",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "pr-review-triage",
+      "category": "code-review",
+      "message": "Our CI bot collects 40 to 60 review comments per pull request and engineers only read the first few, so I want each new comment classified as must-fix, nice-to-have, or ignore so the list gets auto-triaged on arrival.",
+      "expect": "use",
+      "acceptable": ["use", "narrow"]
+    },
+    {
+      "id": "drone-control-step",
+      "category": "safety-critical-control",
+      "message": "The flight controller in our delivery drones must decide every few seconds: continue the route, hover in place, or divert to land, using battery level, wind speed, and no-fly-zone proximity from the current telemetry.",
+      "expect": "narrow",
+      "acceptable": ["narrow", "use"]
     }
   ]
 }

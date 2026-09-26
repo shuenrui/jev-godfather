@@ -47,6 +47,13 @@ function adviceApiPlugin() {
       const response = await adviceHandler(request)
       res.statusCode = response.status
       response.headers.forEach((value, key) => res.setHeader(key, value))
+      const contentType = response.headers.get('content-type') || ''
+      if (contentType.includes('x-ndjson') && response.body) {
+        res.flushHeaders?.()
+        for await (const chunk of response.body) res.write(chunk)
+        res.end()
+        return
+      }
       res.end(await response.text())
     } catch (error) {
       res.statusCode = 500

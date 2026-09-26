@@ -63,8 +63,50 @@ function modeNote(advice, hasOwnKey) {
   if (advice.mode === 'offline') return `Offline fallback · ${advice.error || 'advisor unreachable'}`
   const parts = []
   if (advice.jevEvaluated) parts.push('Jev evaluated')
+  if (advice.decomposition?.status === 'applied' && advice.decomposition.steps?.length) parts.push(`screened ${advice.decomposition.steps.length} steps`)
   if (hasOwnKey) parts.push('your token')
   return parts.length ? parts.join(' · ') : null
+}
+
+async function readStageStream(body, onStage) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result = null
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let newline
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline).trim()
+      buffer = buffer.slice(newline + 1)
+      if (!line) continue
+      let event = null
+      try {
+        event = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (event?.type === 'result') result = event
+      else if (event?.type === 'stage') onStage(event)
+    }
+  }
+  if (!result) throw new Error('advisor stream ended without a result')
+  const { type: _type, ...payload } = result
+  return payload
+}
+
+function stageLines(stages) {
+  const lines = []
+  for (const event of stages) {
+    if (event.stage === 'screening') lines.push(`Seed boundary · ${event.decision}`)
+    else if (event.stage === 'screened') lines.push(`Jev screened · ${event.verdict}`)
+    else if (event.stage === 'decomposing') lines.push('Decomposing the workflow into steps…')
+    else if (event.stage === 'steps') (event.steps || []).forEach((step, index) => lines.push(`${index + 1}. ${step}`))
+    else if (event.stage === 'chosen') lines.push(event.chosenStepIndex == null ? 'Jev kept the seed boundary' : `Jev chose step ${event.chosenStepIndex + 1}`)
+  }
+  return lines
 }
 
 function fallbackComparison(advice) {
@@ -286,6 +328,7 @@ function App() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState([])
   const [isThinking, setIsThinking] = useState(false)
+  const [stages, setStages] = useState([])
   const [keys, setKeys] = useState(loadKeys)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const activeRequest = useRef(null)
@@ -315,6 +358,7 @@ function App() {
     const generation = conversationGeneration.current
 
     setInput('')
+    setStages([])
     setMessages((current) => [...current, { role: 'user', text: trimmed }])
     setIsThinking(true)
     const controller = new AbortController()
@@ -327,17 +371,25 @@ function App() {
         body: JSON.stringify({ message: trimmed }),
         signal: controller.signal,
       })
-      const text = await response.text()
+      const contentType = response.headers.get('content-type') || ''
       let data = null
-      try {
-        data = JSON.parse(text)
-      } catch {
-        // Gateway or proxy answered with non-JSON (e.g. plain-text 502).
+      if (response.ok && contentType.includes('x-ndjson') && response.body) {
+        data = await readStageStream(response.body, (event) => {
+          if (generation === conversationGeneration.current) setStages((current) => [...current, event])
+        })
+      } else {
+        const text = await response.text()
+        try {
+          data = JSON.parse(text)
+        } catch {
+          // Gateway or proxy answered with non-JSON (e.g. plain-text 502).
+        }
+        if (!response.ok || data?.error) {
+          const detail = data?.error || (text && text.length < 200 ? text.trim() : `HTTP ${response.status}`)
+          throw new Error(detail)
+        }
       }
-      if (!response.ok || data?.error) {
-        const detail = data?.error || (text && text.length < 200 ? text.trim() : `HTTP ${response.status}`)
-        throw new Error(detail)
-      }
+      if (!data) throw new Error('advisor returned no result')
 
       if (generation !== conversationGeneration.current) return
       setMessages((current) => [...current, { role: 'assistant', text: trimmed, advice: data }])
@@ -354,6 +406,7 @@ function App() {
       ])
     } finally {
       if (activeRequest.current === controller) activeRequest.current = null
+      setStages([])
       setIsThinking(false)
     }
   }
@@ -466,7 +519,17 @@ function App() {
                   </article>
                 )
               ))}
-              {isThinking && <div className="thinking"><span /><span /><span /> Mapping the decision boundary</div>}
+              {isThinking && (stages.length > 0 ? (
+                <div className="stage-log" aria-live="polite" aria-label="Screening stages">
+                  {stageLines(stages).map((line, index, arr) => (
+                    <p key={`${line}-${index}`} className={index === arr.length - 1 ? 'stage current' : 'stage'}>
+                      <span className="stage-icon">{index === arr.length - 1 ? '●' : '✓'}</span> {line}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <div className="thinking"><span /><span /><span /> Mapping the decision boundary</div>
+              ))}
             </div>
           )}
         </section>

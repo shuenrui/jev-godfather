@@ -8,6 +8,8 @@ const LLM_TIMEOUT_MS = 10000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
 const SCREENED_LLM_TIMEOUT_MS = 6000
+const DECOMPOSE_LLM_TIMEOUT_MS = 8000
+const RECHECK_JEV_TIMEOUT_MS = 3000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
@@ -86,6 +88,22 @@ Return ONLY valid JSON with exactly these keys:
 }
 
 Return one or two candidate boundaries. Keep every string short and operational. No markdown or text outside JSON.`
+
+const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into 3-5 concrete operational steps, in execution order. Each step must describe one repeated action the running system actually performs — not a phase, not a milestone, not advice.
+
+Return ONLY valid JSON:
+{
+  "steps": [
+    {
+      "decision": string (one bounded question this step must answer each time it runs, phrased as a question),
+      "questionType": "choice" | "score" | "noul",
+      "choices": string[] (2-6 finite options for choice/score; omit or empty for noul),
+      "why": string (one short sentence on why this question recurs),
+      "stateFields": string[] (2-6 inputs observably available at the moment the step runs)
+    }
+  ]
+}
+Steps are structural decomposition only; you are not deciding whether any step needs Jev. Use the user's own vocabulary. No markdown, no text outside the JSON object.`
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -348,6 +366,62 @@ async function askLlm(message, config, { compact = false, screen = null } = {}) 
   }
 }
 
+async function askDecompose(message, config) {
+  const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
+  const session = createHash('sha256').update(`decompose:${message}`).digest('hex').slice(0, 64)
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'User-Agent': USER_AGENT,
+      'x-opencode-session': session,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: DECOMPOSE_SYSTEM_PROMPT },
+        { role: 'user', content: message.slice(0, 3600) },
+      ],
+      max_tokens: 400,
+    }),
+    signal: AbortSignal.timeout(DECOMPOSE_LLM_TIMEOUT_MS),
+  })
+
+  if (!response.ok) throw new Error(`Decomposition LLM returned HTTP ${response.status}`)
+  const data = await response.json()
+  const content = data?.choices?.[0]?.message?.content
+  if (typeof content !== 'string') throw new Error('Decomposition LLM returned no content')
+  const raw = extractJson(content)
+  if (!Array.isArray(raw?.steps)) throw new Error('Decomposition returned no steps array')
+  const usable = raw.steps
+    .filter((step) => step && typeof step.decision === 'string' && step.decision.trim())
+    .slice(0, 5)
+    .map((step, index) => normalizeCandidate(step, index + 1))
+  return usable.length >= 2 ? usable : null
+}
+
+async function askJevTimed(message, card, config, timeoutMs) {
+  if (!config.typesafeKey) return null
+  try {
+    return await withDeadline(askJev(message, card, config), timeoutMs, 'Jev screening')
+  } catch {
+    return null
+  }
+}
+
+function minScreenScore(jev, candidateId) {
+  const metrics = jev?.metrics?.[candidateId]
+  if (!metrics) return null
+  return Math.min(metrics.bounded, metrics.observable, metrics.repeated)
+}
+
+function formatScore(value) {
+  return typeof value === 'number' ? Number(value.toFixed(2)) : null
+}
+
 async function askJev(message, card, config) {
   const key = config.typesafeKey
   if (!key) return null
@@ -470,14 +544,137 @@ function degradedCard(message, error) {
   }
 }
 
-async function screenWithJev(message, config) {
-  if (!config.typesafeKey) return null
+function fieldOverrides(card) {
+  return {
+    fit: card.fit,
+    fitClass: card.fitClass,
+    verdict: card.verdict,
+    decision: card.decision,
+    questionType: card.questionType,
+    choices: card.choices,
+    stateFields: card.stateFields,
+    jevOwns: card.jevOwns,
+    codeOwns: card.codeOwns,
+    avoid: card.avoid,
+    threshold: card.threshold,
+    fallback: card.fallback,
+    successTest: card.successTest,
+    selectionBasis: card.selectionBasis,
+  }
+}
+
+// Runs the full seed → screen → decompose → re-screen → explain ladder.
+// Every provider stage has its own deadline; each miss degrades to the
+// previous stage's already-valid result, never to an error.
+async function produceAdvice(message, config, emit) {
+  const decomposition = { status: 'not-configured', steps: [], chosenStepIndex: null, minScoreBefore: null, minScoreAfter: null }
   const seed = seedCard(message)
+
+  if (!config.llmKey) {
+    const jev = await askJevTimed(message, seed, config, JEV_TIMEOUT_MS)
+    const screen = jev ? applyJev(seed, jev) : null
+    const card = screen || { ...pickAdvice(message) }
+    emit({
+      type: 'result',
+      ...card,
+      comparison: buildComparison(card),
+      mode: screen ? 'jev-screened-demo' : 'demo',
+      screening: screen ? 'jev-first' : null,
+      jevEvaluated: Boolean(screen),
+      schema: typeSafeExample(card, message),
+      decomposition,
+    })
+    return
+  }
+
+  emit({ type: 'stage', stage: 'screening', decision: seed.decision })
+  const jev1 = await askJevTimed(message, seed, config, JEV_TIMEOUT_MS)
+  const screen1 = jev1 ? applyJev(seed, jev1) : null
+  if (screen1) emit({ type: 'stage', stage: 'screened', verdict: screen1.verdict, selectionBasis: screen1.selectionBasis })
+
+  let final = screen1
+  if (final && config.typesafeKey) {
+    const min1 = minScreenScore(jev1, final.selectedBoundaryId)
+    decomposition.minScoreBefore = formatScore(min1)
+    emit({ type: 'stage', stage: 'decomposing' })
+    decomposition.status = 'skipped'
+    try {
+      const steps = await withDeadline(askDecompose(message, config), DECOMPOSE_LLM_TIMEOUT_MS, 'Decomposition')
+      if (steps) {
+        decomposition.steps = steps.map((step) => step.decision)
+        emit({ type: 'stage', stage: 'steps', steps: decomposition.steps })
+        const candidates = [...seed.candidates, ...steps]
+        const jev2 = await askJevTimed(message, { ...final, candidates }, config, RECHECK_JEV_TIMEOUT_MS)
+        if (jev2) {
+          const chosen = jev2.choice === 'none' ? null : candidates.find((candidate) => candidate.id === jev2.choice) || null
+          const min2 = chosen ? minScreenScore(jev2, chosen.id) : null
+          decomposition.minScoreAfter = formatScore(min2)
+          const beatsSeed =
+            chosen && chosen.id !== seed.selectedBoundaryId && min2 != null && (min1 == null || min2 >= min1)
+          if (beatsSeed) {
+            final = { ...applyJev({ ...final, candidates }, jev2), summary: chosen.why }
+            decomposition.status = 'applied'
+            decomposition.chosenStepIndex = candidates.indexOf(chosen) - 1
+          }
+          emit({ type: 'stage', stage: 'chosen', chosenStepIndex: decomposition.chosenStepIndex, selectionBasis: final.selectionBasis })
+        }
+      }
+    } catch {
+      decomposition.status = 'failed'
+    }
+  }
+
   try {
-    const jev = await withDeadline(askJev(message, seed, config), JEV_TIMEOUT_MS, 'Jev screening')
-    return jev ? applyJev(seed, jev) : null
-  } catch {
-    return null
+    let result
+    let compactRecovery = false
+    if (final) {
+      try {
+        result = await withDeadline(askLlm(message, config, { screen: final }), SCREENED_LLM_TIMEOUT_MS, 'Screened LLM request')
+      } catch (error) {
+        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+        if (!timedOut) throw error
+        emit({
+          type: 'result',
+          ...final,
+          comparison: buildComparison(final),
+          mode: 'jev-screened',
+          jevEvaluated: true,
+          screening: 'jev-first',
+          llmStatus: 'timed_out_after_screen',
+          schema: typeSafeExample(final, message),
+          decomposition,
+        })
+        return
+      }
+    } else {
+      try {
+        result = await withDeadline(askLlm(message, config), LLM_TIMEOUT_MS, 'LLM request')
+      } catch (error) {
+        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+        if (!timedOut) throw error
+        result = await withDeadline(askLlm(message, config, { compact: true }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
+        compactRecovery = true
+      }
+    }
+    const card = final ? { ...result.card, ...fieldOverrides(final), screenedDecision: final.decision } : result.card
+    emit({
+      type: 'result',
+      ...card,
+      comparison: buildComparison(card),
+      mode: compactRecovery ? 'live-compact' : 'live',
+      jevEvaluated: Boolean(final),
+      screening: final ? 'jev-first' : 'llm-only',
+      schema: typeSafeExample(card, message),
+      decomposition,
+    })
+  } catch (error) {
+    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+    const detail = timedOut
+      ? `the LLM and compact recovery pass did not answer within the release budget — please try again`
+      : error?.message || error
+    const fallback = degradedCard(message, detail)
+    const payload = final ? { ...fallback, ...fieldOverrides(final), jevEvaluated: true, screening: 'jev-first' } : fallback
+    emit({ type: 'result', ...payload, decomposition })
   }
 }
 
@@ -497,104 +694,23 @@ export async function adviceHandler(request) {
 
   const config = readConfig(request)
 
-  if (!config.llmKey) {
-    const screen = await screenWithJev(message, config)
-    const card = screen || { ...pickAdvice(message) }
-    return json({
-      ...card,
-      comparison: buildComparison(card),
-      mode: screen ? 'jev-screened-demo' : 'demo',
-      jevEvaluated: Boolean(screen),
-      schema: typeSafeExample(card, message),
-    })
-  }
-
-  let screen = null
-  try {
-    screen = await screenWithJev(message, config)
-    let result
-    let compactRecovery = false
-    if (screen) {
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      const emit = (event) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
       try {
-        result = await withDeadline(askLlm(message, config, { screen }), SCREENED_LLM_TIMEOUT_MS, 'Screened LLM request')
+        await produceAdvice(message, config, emit)
       } catch (error) {
-        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-        if (!timedOut) throw error
-        return json({
-          ...screen,
-          comparison: buildComparison(screen),
-          mode: 'jev-screened',
-          jevEvaluated: true,
-          screening: 'jev-first',
-          llmStatus: 'timed_out_after_screen',
-          schema: typeSafeExample(screen, message),
-        })
-      }
-    } else {
-      try {
-        result = await withDeadline(askLlm(message, config), LLM_TIMEOUT_MS, 'LLM request')
-      } catch (error) {
-        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-        if (!timedOut) throw error
-        result = await withDeadline(askLlm(message, config, { compact: true }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
-        compactRecovery = true
-      }
-    }
-    const card = screen
-      ? {
-          ...result.card,
-          fit: screen.fit,
-          fitClass: screen.fitClass,
-          verdict: screen.verdict,
-          decision: screen.decision,
-          questionType: screen.questionType,
-          choices: screen.choices,
-          stateFields: screen.stateFields,
-          jevOwns: screen.jevOwns,
-          codeOwns: screen.codeOwns,
-          avoid: screen.avoid,
-          threshold: screen.threshold,
-          fallback: screen.fallback,
-          successTest: screen.successTest,
-          selectionBasis: screen.selectionBasis,
-          screenedDecision: screen.decision,
+        try {
+          emit({ type: 'result', ...degradedCard(message, error?.message || String(error)) })
+        } catch {
+          /* stream already closed */
         }
-      : result.card
+      } finally {
+        controller.close()
+      }
+    },
+  })
 
-    return json({
-      ...card,
-      comparison: buildComparison(card),
-      mode: compactRecovery ? 'live-compact' : 'live',
-      jevEvaluated: Boolean(screen),
-      screening: screen ? 'jev-first' : 'llm-only',
-      schema: typeSafeExample(card, message),
-    })
-  } catch (error) {
-    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-    const detail = timedOut
-      ? `the LLM and compact recovery pass did not answer within the release budget — please try again`
-      : error?.message || error
-    const fallback = degradedCard(message, detail)
-    if (screen) {
-      return json({
-        ...fallback,
-        fit: screen.fit,
-        fitClass: screen.fitClass,
-        verdict: screen.verdict,
-        decision: screen.decision,
-        questionType: screen.questionType,
-        choices: screen.choices,
-        stateFields: screen.stateFields,
-        jevOwns: screen.jevOwns,
-        codeOwns: screen.codeOwns,
-        threshold: screen.threshold,
-        fallback: screen.fallback,
-        successTest: screen.successTest,
-        selectionBasis: screen.selectionBasis,
-        jevEvaluated: true,
-        screening: 'jev-first',
-      }, 200)
-    }
-    return json(fallback, 200)
-  }
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } })
 }
