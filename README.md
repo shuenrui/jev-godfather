@@ -50,7 +50,8 @@ stays entirely with Jev and code.
    deadline. Jev answers typed questions: is the boundary bounded, observable,
    repeated, and is a wrong auto-decision high-consequence.
 3. **Decomposition re-screen** (only when both LLM and TypeSafe keys are
-   configured): a compact LLM call (8s deadline) decomposes the described
+   configured): a compact LLM call (18s deadline, `reasoning_effort: "none"`,
+   1200-token budget) decomposes the described
    workflow into 3–5 operational steps, each phrased as a bounded question.
    Jev re-screens the seed plus all step candidates in one call (3s deadline).
    A step boundary replaces the seed verdict **only if it screens strictly
@@ -74,8 +75,15 @@ one `{"type":"stage",…}` event per pipeline phase (`screening`, `screened`,
 renders the stage events in a live process panel while the request runs and
 collapses it into the single recommendation card when the result arrives.
 Plain-JSON responses remain for validation errors and any client that cannot
-stream. Worst-case wall time is ~19s (2+8+3+6 deadlines); the first stage event
-lands as soon as the seed screen finishes.
+stream. Worst-case wall time is ~29s (2+18+3+6 deadlines); the first stage
+event lands as soon as the seed screen finishes, and successful decompositions
+have measured ~12-18s end to end on the live provider. Budgets reflect that
+provider's measured ~25 tokens/s and its reasoning-mode trap: default hidden
+thinking consumed the entire token budget and returned empty content, so
+decomposition explicitly requests `reasoning_effort: "none"`. Full explanations
+still rarely fit any browser-tolerant budget — that stage is optional polish
+by design and falls back to the screened card. Latency is preferred over
+failure.
 
 ## Response modes
 

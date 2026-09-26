@@ -8,7 +8,7 @@ const LLM_TIMEOUT_MS = 10000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
 const SCREENED_LLM_TIMEOUT_MS = 6000
-const DECOMPOSE_LLM_TIMEOUT_MS = 8000
+const DECOMPOSE_LLM_TIMEOUT_MS = 18000
 const RECHECK_JEV_TIMEOUT_MS = 3000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
@@ -385,7 +385,12 @@ async function askDecompose(message, config) {
         { role: 'system', content: DECOMPOSE_SYSTEM_PROMPT },
         { role: 'user', content: message.slice(0, 3600) },
       ],
-      max_tokens: 400,
+      // Reasoning models (e.g. glm-5.3-flash) burn max_tokens on hidden
+      // thinking; default thinking produced zero content. reasoning_effort
+      // "none" makes the provider answer directly (~13-18s at ~25 tok/s)
+      // and still emit valid structured steps.
+      max_tokens: 1200,
+      reasoning_effort: 'none',
     }),
     signal: AbortSignal.timeout(DECOMPOSE_LLM_TIMEOUT_MS),
   })
