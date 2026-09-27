@@ -4,10 +4,10 @@ import { pickAdvice } from '../src/adviceLibrary.js'
 // Keep enough budget for a compact recovery pass plus the optional Jev call.
 // Keep the API inside a browser-friendly budget. A slow provider should become
 // a labelled bounded response, not an apparent offline failure in the client.
-const LLM_TIMEOUT_MS = 20000
+const LLM_TIMEOUT_MS = 30000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
-const SCREENED_LLM_TIMEOUT_MS = 20000
+const SCREENED_LLM_TIMEOUT_MS = 30000
 // The tailored path may wait long: a slow provider is worth waiting for
 // rather than failing or substituting generic advice. Heartbeat stage events
 // keep the stream (and the user) alive through the wait.
@@ -366,6 +366,9 @@ async function askLlm(message, config, { compact = false, screen = null } = {}) 
         { role: 'user', content: `${message.slice(0, 3600)}${screenInstruction(screen)}` },
       ],
       max_tokens: compact ? 900 : 1400,
+      // Same reasoning-token trap as decomposition: hidden thinking ate the
+      // entire budget and the content came back empty.
+      reasoning_effort: 'none',
     }),
     signal: AbortSignal.timeout(compact ? COMPACT_LLM_TIMEOUT_MS : LLM_TIMEOUT_MS),
   })
