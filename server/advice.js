@@ -8,8 +8,8 @@ const LLM_TIMEOUT_MS = 10000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
 const SCREENED_LLM_TIMEOUT_MS = 6000
-const DECOMPOSE_LLM_TIMEOUT_MS = 28000
-const RECHECK_JEV_TIMEOUT_MS = 3000
+const DECOMPOSE_LLM_TIMEOUT_MS = 40000
+const RECHECK_JEV_TIMEOUT_MS = 4000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
@@ -89,10 +89,11 @@ Return ONLY valid JSON with exactly these keys:
 
 Return one or two candidate boundaries. Keep every string short and operational. No markdown or text outside JSON.`
 
-const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into 4-5 concrete operational steps in execution order that together cover the WHOLE described pipeline — intake, each judgment, each action, each check the user mentions. Each step names one repeated decision the running system makes every time it runs.
+const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into 5-7 concrete operational steps in execution order that together cover the WHOLE described pipeline — intake, each judgment, each action, each check the user mentions. Each step names one repeated decision the running system makes every time it runs. Omit a stage only if the user truly has none.
 
 Vocabulary rules — these matter most:
 - Use the user's own nouns, labels, queues, thresholds, and categories verbatim.
+- Every decision must name its real subject (the ticket, the email, the comment, the drone), never a vague placeholder like "the item".
 - If the user enumerates options (e.g. four email categories), put those exact options into the choices of ONE "choice" question. Do not split one enumerated set into several yes/no steps.
 - Never use placeholder options like act/defer/escalate unless the user used those words.
 
@@ -401,9 +402,9 @@ async function askDecompose(message, config) {
       ],
       // Reasoning models (e.g. glm-5.3-flash) burn max_tokens on hidden
       // thinking; default thinking produced zero content. reasoning_effort
-      // "none" makes the provider answer directly (~26 tok/s), and ~500-600
-      // tokens of concrete steps needs this budget and deadline.
-      max_tokens: 1000,
+      // "none" answers directly at ~26 tok/s, so 5-7 concrete steps need
+      // this budget (~900 output tokens) and a matching deadline.
+      max_tokens: 1500,
       reasoning_effort: 'none',
     }),
     signal: AbortSignal.timeout(DECOMPOSE_LLM_TIMEOUT_MS),
@@ -417,7 +418,7 @@ async function askDecompose(message, config) {
   if (!Array.isArray(raw?.steps)) throw new Error('Decomposition returned no steps array')
   const usable = raw.steps
     .filter((step) => step && typeof step.decision === 'string' && step.decision.trim())
-    .slice(0, 5)
+    .slice(0, 7)
     .map((step, index) => normalizeCandidate(step, index + 1))
   return usable.length >= 2 ? usable : null
 }

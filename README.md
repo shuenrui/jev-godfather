@@ -22,7 +22,7 @@ Local pattern seed            src/adviceLibrary.js → seedCard()
     ↓
 Jev screening                 TypeSafe /systemone judges the seeded boundary
     ↓                           (bounded? observable? repeated? high-consequence?)
-LLM step decomposition        compact call: 4–5 operational steps, each a
+LLM step decomposition        compact call: 5–7 operational steps, each a
     ↓                           bounded question — structure only, no fit verdict
 Jev re-screening              one call screens seed + all steps;
     ↓                           a step wins only by screening strictly better
@@ -50,10 +50,10 @@ stays entirely with Jev and code.
    deadline. Jev answers typed questions: is the boundary bounded, observable,
    repeated, and is a wrong auto-decision high-consequence.
 3. **Decomposition re-screen** (only when both LLM and TypeSafe keys are
-   configured): a compact LLM call (28s deadline, `reasoning_effort: "none"`,
-   1000-token budget) decomposes the described workflow into 4–5 operational
-   steps, each phrased as a bounded question using the user's own vocabulary.
-   Jev re-screens the seed plus all step candidates in one call (3s deadline).
+   configured): a compact LLM call (40s deadline, `reasoning_effort: "none"`,
+   1500-token budget) decomposes the described workflow into 5–7 concrete
+   operational steps using the user's own vocabulary.
+   Jev re-screens the seed plus all step candidates in one call (4s deadline).
    A step boundary replaces the seed verdict **only if it screens strictly
    better** (`min(bounded, observable, repeated) ≥ the seed's`) — pure code
    policy, and the LLM never gets a vote on fit. The result ships as a
@@ -75,7 +75,7 @@ one `{"type":"stage",…}` event per pipeline phase (`screening`, `screened`,
 renders the stage events in a live process panel while the request runs and
 collapses it into the single recommendation card when the result arrives.
 Plain-JSON responses remain for validation errors and any client that cannot
-stream. Worst-case wall time is ~39s (2+28+3+6 deadlines); the first stage
+stream. Worst-case wall time is ~52s (2+40+4+6 deadlines); the first stage
 event lands as soon as the seed screen finishes, and successful decompositions
 have measured ~12-18s end to end on the live provider. Budgets reflect that
 provider's measured ~25 tokens/s and its reasoning-mode trap: default hidden
