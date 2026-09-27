@@ -8,7 +8,7 @@ const LLM_TIMEOUT_MS = 10000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
 const SCREENED_LLM_TIMEOUT_MS = 6000
-const DECOMPOSE_LLM_TIMEOUT_MS = 18000
+const DECOMPOSE_LLM_TIMEOUT_MS = 28000
 const RECHECK_JEV_TIMEOUT_MS = 3000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
@@ -89,21 +89,35 @@ Return ONLY valid JSON with exactly these keys:
 
 Return one or two candidate boundaries. Keep every string short and operational. No markdown or text outside JSON.`
 
-const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into 3-5 concrete operational steps, in execution order. Each step must describe one repeated action the running system actually performs — not a phase, not a milestone, not advice.
+const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into 4-5 concrete operational steps in execution order that together cover the WHOLE described pipeline — intake, each judgment, each action, each check the user mentions. Each step names one repeated decision the running system makes every time it runs.
+
+Vocabulary rules — these matter most:
+- Use the user's own nouns, labels, queues, thresholds, and categories verbatim.
+- If the user enumerates options (e.g. four email categories), put those exact options into the choices of ONE "choice" question. Do not split one enumerated set into several yes/no steps.
+- Never use placeholder options like act/defer/escalate unless the user used those words.
+
+Field rules:
+- decision: the exact question, 12 words or fewer.
+- questionType: "choice" when options are enumerable, otherwise "noul" or "score".
+- choices: the user's own labels, 2-6 items.
+- stateFields: 2-5 inputs observably available at the moment the step runs, named concretely.
+- jevOwns: one short sentence (10 words or fewer) naming exactly what this step picks.
+- codeOwns: one short sentence (12 words or fewer) naming what deterministic code does around this step.
 
 Return ONLY valid JSON:
 {
   "steps": [
     {
-      "decision": string (one bounded question this step must answer each time it runs, phrased as a question),
+      "decision": string,
       "questionType": "choice" | "score" | "noul",
-      "choices": string[] (2-6 finite options for choice/score; omit or empty for noul),
-      "why": string (one short sentence on why this question recurs),
-      "stateFields": string[] (2-6 inputs observably available at the moment the step runs)
+      "choices": string[],
+      "stateFields": string[],
+      "jevOwns": string,
+      "codeOwns": string
     }
   ]
 }
-Steps are structural decomposition only; you are not deciding whether any step needs Jev. Use the user's own vocabulary. No markdown, no text outside the JSON object.`
+Steps are structural decomposition only; you are not deciding whether any step needs Jev. No markdown, no text outside the JSON object.`
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -387,9 +401,9 @@ async function askDecompose(message, config) {
       ],
       // Reasoning models (e.g. glm-5.3-flash) burn max_tokens on hidden
       // thinking; default thinking produced zero content. reasoning_effort
-      // "none" makes the provider answer directly (~13-18s at ~25 tok/s)
-      // and still emit valid structured steps.
-      max_tokens: 1200,
+      // "none" makes the provider answer directly (~26 tok/s), and ~500-600
+      // tokens of concrete steps needs this budget and deadline.
+      max_tokens: 1000,
       reasoning_effort: 'none',
     }),
     signal: AbortSignal.timeout(DECOMPOSE_LLM_TIMEOUT_MS),
@@ -617,7 +631,10 @@ async function produceAdvice(message, config, emit) {
           const beatsSeed =
             chosen && chosen.id !== seed.selectedBoundaryId && min2 != null && (min1 == null || min2 >= min1)
           if (beatsSeed) {
-            final = { ...applyJev({ ...final, candidates }, jev2), summary: chosen.why }
+            final = {
+              ...applyJev({ ...final, candidates }, jev2),
+              summary: `The chosen step repeats one question: ${chosen.decision} ${chosen.jevOwns}`,
+            }
             decomposition.status = 'applied'
             decomposition.chosenStepIndex = candidates.indexOf(chosen) - 1
           }
