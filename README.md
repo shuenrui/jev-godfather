@@ -10,97 +10,86 @@ Live site: <https://jev-godfather.innstance.app>
 
 ## Architecture
 
-The core rule: **Jev screens first, the LLM explains next.** If Jev rejects a
-boundary, the LLM is not allowed to reverse that verdict into a Jev
-recommendation. The LLM may also decompose the workflow into steps — but each
-step must earn its verdict through Jev re-screening, never through prose.
+The core rule: **every verdict is tailored.** The AI breaks *your* described
+workflow into concrete steps; Jev screens those steps; code turns the scores
+into a verdict. No hand-written pattern takes a vote on your request while the
+providers are available — a rejection means Jev rejected the actual steps of
+your pipeline, not a generic placeholder.
 
 ```text
 User request
     ↓
-Local pattern seed            src/adviceLibrary.js → seedCard()
-    ↓
-Jev screening                 TypeSafe /systemone judges the seeded boundary
+LLM step decomposition        compact call: 5–7 operational steps of YOUR
+    ↓                           pipeline, in your own vocabulary — structure
+    ↓                           only, no fit verdict
+Jev screening                 TypeSafe /systemone scores every step
     ↓                           (bounded? observable? repeated? high-consequence?)
-LLM step decomposition        compact call: 5–7 operational steps, each a
-    ↓                           bounded question — structure only, no fit verdict
-Jev re-screening              one call screens seed + all steps;
-    ↓                           a step wins only by screening strictly better
-LLM explanation               constrained by the final screen; cannot reverse it
-    ↓
-Application policy            server/advice.js enforces verdicts and deadlines
+Application policy            server/advice.js maps scores to verdicts;
+    ↓                           all-steps-rejected = honest "Do not use Jev yet"
+LLM explanation               constrained by the screen; cannot reverse it
     ↓
 Rendered recommendation       stage events stream live, then collapse into
                               the single React advisor card
 ```
 
-Previously the flow was LLM-first (the LLM invented candidate boundaries and
-Jev evaluated them). That inverted the ownership model — a generative model was
-choosing what Jev should judge. The current flow seeds the boundary
-deterministically, screens it with Jev, and only then pays the LLM to explain
-implementation details. The decomposition pass reintroduces LLM creativity in
-the one place it is safe — naming candidate *steps* — while the fit decision
-stays entirely with Jev and code.
+Earlier designs are retired: LLM-first (the generative model chose what Jev
+judged) and seed-first (hand-written keyword patterns were screened and could
+override your specifics). Both generalized your request before judgment. The
+current flow keeps LLM creativity in the one safe place — naming candidate
+*steps from your description* — while the fit decision stays entirely with
+Jev and code.
 
 `POST /api/advice` in `server/advice.js`:
 
-1. Build a local seed card from the matching pattern (support triage, command
-   safety, model routing, frontend design pipelines, or a default).
-2. If a TypeSafe key is configured, screen the seed with Jev under a 2s
-   deadline. Jev answers typed questions: is the boundary bounded, observable,
-   repeated, and is a wrong auto-decision high-consequence.
-3. **Decomposition re-screen** (only when both LLM and TypeSafe keys are
-   configured): a compact LLM call (40s deadline, `reasoning_effort: "none"`,
-   1500-token budget) decomposes the described workflow into 5–7 concrete
-   operational steps using the user's own vocabulary.
-   Jev re-screens the seed plus all step candidates in one call (4s deadline).
-   A step boundary replaces the seed verdict **only if it screens strictly
-   better** (`min(bounded, observable, repeated) ≥ the seed's`) — pure code
-   policy, and the LLM never gets a vote on fit. The result ships as a
-   `decomposition` object (`applied | skipped | failed | not-configured`, the
-   step decisions, the chosen step, and the before/after scores).
-4. If a screen exists, ask the LLM (6s deadline) to explain around that exact
-   boundary, with an instruction that the screening is authoritative.
-5. If there is no screen (no key, or Jev timed out), ask the LLM normally (10s
-   deadline); on timeout, try a compact recovery pass (5s deadline).
-6. Apply policy, generate comparison data and a TypeSafe request example, and
-   return the result. Every provider call is wrapped in a hard promise-level
-   deadline so a slow provider becomes a labelled bounded response, never a
-   browser-level timeout.
+1. **Decomposition** (both LLM and TypeSafe keys): a `reasoning_effort:
+   "none"` LLM call lists 5–7 decision-critical steps of the described
+   pipeline, each a bounded question with its own state fields and ownership
+   lines. Budget: 90s, plus one 60s retry asking for only the 3 most
+   decision-critical steps. The request's own vocabulary is mandatory —
+   placeholder options like `act/defer/escalate` are banned in the prompt.
+2. **Jev screening**: one `/systemone` call (6s deadline) scores every step —
+   bounded, observable, repeated, high-consequence — and picks the best, or
+   `none`. If it picks the best step, the verdict is `Use Jev` / `Use Jev
+   narrowly` per fixed score thresholds; if it picks `none`, the verdict is a
+   *tailored* `Do not use Jev yet` ("Jev screened all N steps taken from your
+   description and found none…"). The response carries a `decomposition`
+   object: `applied | rejected | failed | not-configured`, the steps, the
+   chosen index, and its score.
+3. **Explanation** (optional polish, 6s deadline): the LLM explains around
+   the final boundary with the screening marked authoritative. If it misses
+   its window the screened card ships anyway (`jev-screened` mode).
+4. **Failure is honest, never generic**: if both decomposition attempts fail,
+   the user gets a visible `No recommendation` card saying the provider never
+   answered and to try again — no analysis is presented, because nothing was
+   judged. Hand-written patterns survive **only** where providers cannot
+   exist: no-key `demo` mode and the browser's `offline` cache, both badged as
+   generic.
+5. Degraded paths without a TypeSafe key (LLM-only) keep the earlier single
+   advisor flow (10s + compact 5s).
 
 Responses stream as **NDJSON** (`Content-Type: application/x-ndjson`):
-one `{"type":"stage",…}` event per pipeline phase (`screening`, `screened`,
-`decomposing`, `steps`, `chosen`) followed by exactly one terminal
-`{"type":"result",…}` event carrying the full advice payload. The client
-renders the stage events in a live process panel while the request runs and
-collapses it into the single recommendation card when the result arrives.
-Plain-JSON responses remain for validation errors and any client that cannot
-stream. Worst-case wall time is ~52s (2+40+4+6 deadlines); the first stage
-event lands as soon as the seed screen finishes, and successful decompositions
-have measured ~12-18s end to end on the live provider. Budgets reflect that
-provider's measured ~25 tokens/s and its reasoning-mode trap: default hidden
-thinking consumed the entire token budget and returned empty content, so
-decomposition explicitly requests `reasoning_effort: "none"`. Full explanations
-still rarely fit any browser-tolerant budget — that stage is optional polish
-by design and falls back to the screened card. Latency is preferred over
-failure.
+`{"type":"stage",…}` events (`decomposing`, `waiting` heartbeats every 15s,
+`steps`, `screened`, `chosen`) followed by exactly one terminal
+`{"type":"result",…}` event. The client renders stages in a live process
+panel and collapses it into the single recommendation card on result. Plain
+JSON remains for validation errors and non-streaming clients. Waiting is a
+deliberate trade: worst case ~156s (90+60+6+6) with heartbeats and a working
+panel, median ~8–20s on the live provider, because a tailored answer you can
+watch forming beats a fast generic one. Budgets reflect the provider's
+measured ~25 tokens/s and its reasoning-mode trap (hidden thinking once ate
+the entire token budget and returned empty content — hence the explicit
+`reasoning_effort: "none"`).
 
 ## Response modes
 
 | `mode` | Meaning |
 | --- | --- |
-| `live` | LLM answered, optionally after Jev screening (`screening: "jev-first"` or `"llm-only"`) |
-| `live-compact` | Main LLM call timed out; the smaller recovery prompt succeeded |
-| `jev-screened` | Jev produced a valid screen but the LLM follow-up missed its window; the Jev-screened recommendation is returned without waiting |
-| `jev-screened-demo` | No LLM key; Jev screened the local seed |
-| `degraded` | Live paths failed; a bounded local pattern is returned (still carrying the Jev verdict if a screen existed) |
-| `demo` | No LLM or TypeSafe key; local patterns only |
-| `offline` | Client-side only: the browser could not reach the API, so it renders a local fallback card |
-
-The configured provider is reachable but often slow for full generations, which
-is why the short `jev-screened` path exists — and why the pipeline streams
-stage events: the user sees the boundary being screened within seconds even
-when the explanation phase never lands.
+| `live` | LLM answered (after Jev screening of your steps, or `llm-only` when no TypeSafe key) |
+| `live-compact` | LLM-only path: main call timed out, smaller recovery prompt succeeded |
+| `jev-screened` | Your steps were screened successfully but the explanation missed its window; the screened card ships anyway |
+| `degraded` | No usable analysis: either an honest `No recommendation` failure card (provider never answered) or, in the LLM-only path, a bounded local fallback |
+| `demo` | No LLM key; generic local patterns only, visibly badged |
+| `offline` | Client-side only: the browser could not reach the API, so it renders a generic local fallback card |
 
 ## What Jev owns
 

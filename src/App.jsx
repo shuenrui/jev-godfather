@@ -57,13 +57,15 @@ function KeyIcon() {
 }
 
 function modeNote(advice, hasOwnKey) {
-  if (advice.mode === 'demo') return 'Demo response · add your LLM key in Keys'
+  if (advice.mode === 'demo') return 'Demo response · generic pattern, add your LLM key in Keys'
+  if (advice.verdict === 'No recommendation') return 'Analysis failed · the provider never answered — nothing was judged'
   if (advice.mode === 'live-compact') return 'Live response · compact recovery pass'
   if (advice.mode === 'degraded') return `Bounded fallback · ${advice.error || 'live advisor timed out'}`
   if (advice.mode === 'offline') return `Offline fallback · ${advice.error || 'advisor unreachable'}`
   const parts = []
   if (advice.jevEvaluated) parts.push('Jev evaluated')
   if (advice.decomposition?.status === 'applied' && advice.decomposition.steps?.length) parts.push(`screened ${advice.decomposition.steps.length} steps`)
+  if (advice.decomposition?.status === 'rejected' && advice.decomposition.steps?.length) parts.push(`rejected all ${advice.decomposition.steps.length} steps`)
   if (hasOwnKey) parts.push('your token')
   return parts.length ? parts.join(' · ') : null
 }
@@ -102,7 +104,8 @@ function stageLines(stages) {
   for (const event of stages) {
     if (event.stage === 'screening') lines.push(`Seed boundary · ${event.decision}`)
     else if (event.stage === 'screened') lines.push(`Jev screened · ${event.verdict}`)
-    else if (event.stage === 'decomposing') lines.push('Decomposing the workflow into steps…')
+    else if (event.stage === 'decomposing') lines.push(event.retry ? 'Provider slow — retrying a shorter decomposition…' : 'Decomposing the workflow into steps…')
+    else if (event.stage === 'waiting') lines.push(`Still waiting on the provider · ${event.seconds}s`)
     else if (event.stage === 'steps') (event.steps || []).forEach((step, index) => lines.push(`${index + 1}. ${step}`))
     else if (event.stage === 'chosen') lines.push(event.chosenStepIndex == null ? 'Jev kept the seed boundary' : `Jev chose step ${event.chosenStepIndex + 1}`)
   }
@@ -495,17 +498,23 @@ function App() {
                       </span>
                     </div>
                     <p className="summary">{message.advice.summary}</p>
-                    <ComparisonReport comparison={message.advice.comparison || fallbackComparison(message.advice)} />
-                    <div className="decision-block">
-                      <span className="eyebrow">THE DECISION · {message.advice.questionType || 'choice'}</span>
-                      <p>{message.advice.decision}</p>
-                      <div className="choice-row">{message.advice.choices.map((choice) => <span key={choice}>{choice}</span>)}</div>
-                    </div>
+                    {message.advice.decision && (
+                      <>
+                        <ComparisonReport comparison={message.advice.comparison || fallbackComparison(message.advice)} />
+                        <div className="decision-block">
+                          <span className="eyebrow">THE DECISION · {message.advice.questionType || 'choice'}</span>
+                          <p>{message.advice.decision}</p>
+                          <div className="choice-row">{(message.advice.choices || []).map((choice) => <span key={choice}>{choice}</span>)}</div>
+                        </div>
+                      </>
+                    )}
                     <RecommendationDetails advice={message.advice} />
-                    <div className="steps-block">
-                      <span className="eyebrow">IMPLEMENTATION ORDER</span>
-                      <ol>{message.advice.steps.map((step) => <li key={step}>{step}</li>)}</ol>
-                    </div>
+                    {message.advice.steps?.length > 0 && (
+                      <div className="steps-block">
+                        <span className="eyebrow">IMPLEMENTATION ORDER</span>
+                        <ol>{message.advice.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+                      </div>
+                    )}
                     {message.advice.schema && (
                       <details className="schema-details">
                         <summary>View TypeSafe request</summary>

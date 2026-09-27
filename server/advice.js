@@ -8,8 +8,12 @@ const LLM_TIMEOUT_MS = 10000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
 const SCREENED_LLM_TIMEOUT_MS = 6000
-const DECOMPOSE_LLM_TIMEOUT_MS = 40000
-const RECHECK_JEV_TIMEOUT_MS = 4000
+// The tailored path may wait long: a slow provider is worth waiting for
+// rather than failing or substituting generic advice. Heartbeat stage events
+// keep the stream (and the user) alive through the wait.
+const DECOMPOSE_LLM_TIMEOUT_MS = 90000
+const DECOMPOSE_RETRY_TIMEOUT_MS = 60000
+const RECHECK_JEV_TIMEOUT_MS = 6000
 const USER_AGENT = 'jev-godfather-advisor/1.0'
 
 const FIT_LABELS = {
@@ -197,7 +201,7 @@ function extractJson(text) {
 
 function normalizeCard(raw) {
   const fit = Object.hasOwn(FIT_LABELS, raw?.fit) ? raw.fit : 'Promising fit'
-  const candidatesRaw = Array.isArray(raw?.candidates) ? raw.candidates.slice(0, 4) : []
+  const candidatesRaw = Array.isArray(raw?.candidates) ? raw.candidates.slice(0, 7) : []
   const candidates = (candidatesRaw.length ? candidatesRaw : [raw]).map(normalizeCandidate)
   const selected = candidates[0]
   const steps = Array.isArray(raw?.steps)
@@ -226,11 +230,6 @@ function normalizeCard(raw) {
           ],
     confidence,
   }
-}
-
-function seedCard(message) {
-  const pattern = pickAdvice(message)
-  return normalizeCard({ ...pattern, candidates: [pattern] })
 }
 
 function screenInstruction(screen) {
@@ -381,7 +380,7 @@ async function askLlm(message, config, { compact = false, screen = null } = {}) 
   }
 }
 
-async function askDecompose(message, config) {
+async function askDecompose(message, config, { lite = false, timeoutMs = DECOMPOSE_LLM_TIMEOUT_MS } = {}) {
   const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
   const session = createHash('sha256').update(`decompose:${message}`).digest('hex').slice(0, 64)
 
@@ -398,16 +397,16 @@ async function askDecompose(message, config) {
       temperature: 0.2,
       messages: [
         { role: 'system', content: DECOMPOSE_SYSTEM_PROMPT },
-        { role: 'user', content: message.slice(0, 3600) },
+        { role: 'user', content: lite ? `${message.slice(0, 3600)}\n\nList only the 3 most decision-critical steps.` : message.slice(0, 3600) },
       ],
       // Reasoning models (e.g. glm-5.3-flash) burn max_tokens on hidden
       // thinking; default thinking produced zero content. reasoning_effort
-      // "none" answers directly at ~26 tok/s, so 5-7 concrete steps need
-      // this budget (~900 output tokens) and a matching deadline.
-      max_tokens: 1500,
+      // "none" answers directly at ~26 tok/s, so 5-7 concrete steps fit in
+      // this budget given the generous deadline.
+      max_tokens: lite ? 700 : 1500,
       reasoning_effort: 'none',
     }),
-    signal: AbortSignal.timeout(DECOMPOSE_LLM_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   })
 
   if (!response.ok) throw new Error(`Decomposition LLM returned HTTP ${response.status}`)
@@ -418,9 +417,30 @@ async function askDecompose(message, config) {
   if (!Array.isArray(raw?.steps)) throw new Error('Decomposition returned no steps array')
   const usable = raw.steps
     .filter((step) => step && typeof step.decision === 'string' && step.decision.trim())
-    .slice(0, 7)
+    .slice(0, lite ? 3 : 7)
     .map((step, index) => normalizeCandidate(step, index + 1))
   return usable.length >= 2 ? usable : null
+}
+
+function withHeartbeat(promise, emit) {
+  const started = Date.now()
+  const timer = setInterval(() => {
+    emit({ type: 'stage', stage: 'waiting', seconds: Math.round((Date.now() - started) / 1000) })
+  }, 15000)
+  return Promise.resolve(promise).finally(() => clearInterval(timer))
+}
+
+async function attemptDecompose(message, config, emit) {
+  try {
+    const steps = await withHeartbeat(askDecompose(message, config), emit)
+    if (steps) return steps
+  } catch { /* fall through to retry */ }
+  emit({ type: 'stage', stage: 'decomposing', retry: true })
+  try {
+    return await withHeartbeat(askDecompose(message, config, { lite: true, timeoutMs: DECOMPOSE_RETRY_TIMEOUT_MS }), emit)
+  } catch {
+    return null
+  }
 }
 
 async function askJevTimed(message, card, config, timeoutMs) {
@@ -583,93 +603,63 @@ function fieldOverrides(card) {
   }
 }
 
-// Runs the full seed → screen → decompose → re-screen → explain ladder.
-// Every provider stage has its own deadline; each miss degrades to the
-// previous stage's already-valid result, never to an error.
+function failedCard(why = 'the AI provider never returned your workflow steps') {
+  return {
+    fit: 'Promising fit',
+    fitClass: 'amber',
+    verdict: 'No recommendation',
+    headline: `Couldn't analyze your workflow — ${why}. Try again.`,
+    summary: 'Nothing was screened, so nothing was recommended. This advisor only judges steps taken from your own description — it will not substitute a generic guess.',
+    decision: '',
+    questionType: null,
+    choices: [],
+    stateFields: [],
+    jevOwns: '',
+    codeOwns: '',
+    avoid: '',
+    threshold: '',
+    fallback: '',
+    successTest: '',
+    missingEvidence: [],
+    referencePatterns: [],
+    steps: ['Send the request again.', 'If retries keep failing, try a shorter description of the workflow.'],
+    confidence: null,
+    candidates: [],
+    comparison: null,
+    mode: 'degraded',
+    jevEvaluated: false,
+    error: `analysis failed: ${why}`,
+  }
+}
+
+// Runs the fully tailored ladder: decompose → Jev screens the user's own
+// steps → optional LLM explanation. No generic seed participates in the
+// verdict. Long waits are allowed (heartbeats keep the stream alive) because
+// a tailored answer is worth the clock; only a genuinely unreachable provider
+// produces an honest failure, never a substituted guess.
 async function produceAdvice(message, config, emit) {
   const decomposition = { status: 'not-configured', steps: [], chosenStepIndex: null, minScoreBefore: null, minScoreAfter: null }
-  const seed = seedCard(message)
 
   if (!config.llmKey) {
-    const jev = await askJevTimed(message, seed, config, JEV_TIMEOUT_MS)
-    const screen = jev ? applyJev(seed, jev) : null
-    const card = screen || { ...pickAdvice(message) }
+    const pattern = pickAdvice(message)
+    const card = { ...pattern, candidates: [{ id: 'boundary_1', decision: pattern.decision }] }
     emit({
       type: 'result',
       ...card,
       comparison: buildComparison(card),
-      mode: screen ? 'jev-screened-demo' : 'demo',
-      screening: screen ? 'jev-first' : null,
-      jevEvaluated: Boolean(screen),
+      mode: 'demo',
+      screening: null,
+      jevEvaluated: false,
       schema: typeSafeExample(card, message),
       decomposition,
     })
     return
   }
 
-  emit({ type: 'stage', stage: 'screening', decision: seed.decision })
-  const jev1 = await askJevTimed(message, seed, config, JEV_TIMEOUT_MS)
-  const screen1 = jev1 ? applyJev(seed, jev1) : null
-  if (screen1) emit({ type: 'stage', stage: 'screened', verdict: screen1.verdict, selectionBasis: screen1.selectionBasis })
-
-  let final = screen1
-  if (final && config.typesafeKey) {
-    const min1 = minScreenScore(jev1, final.selectedBoundaryId)
-    decomposition.minScoreBefore = formatScore(min1)
-    emit({ type: 'stage', stage: 'decomposing' })
-    decomposition.status = 'skipped'
+  if (!config.typesafeKey) {
     try {
-      const steps = await withDeadline(askDecompose(message, config), DECOMPOSE_LLM_TIMEOUT_MS, 'Decomposition')
-      if (steps) {
-        decomposition.steps = steps.map((step) => step.decision)
-        emit({ type: 'stage', stage: 'steps', steps: decomposition.steps })
-        const candidates = [...seed.candidates, ...steps]
-        const jev2 = await askJevTimed(message, { ...final, candidates }, config, RECHECK_JEV_TIMEOUT_MS)
-        if (jev2) {
-          const chosen = jev2.choice === 'none' ? null : candidates.find((candidate) => candidate.id === jev2.choice) || null
-          const min2 = chosen ? minScreenScore(jev2, chosen.id) : null
-          decomposition.minScoreAfter = formatScore(min2)
-          const beatsSeed =
-            chosen && chosen.id !== seed.selectedBoundaryId && min2 != null && (min1 == null || min2 >= min1)
-          if (beatsSeed) {
-            final = {
-              ...applyJev({ ...final, candidates }, jev2),
-              summary: `The chosen step repeats one question: ${chosen.decision} ${chosen.jevOwns}`,
-            }
-            decomposition.status = 'applied'
-            decomposition.chosenStepIndex = candidates.indexOf(chosen) - 1
-          }
-          emit({ type: 'stage', stage: 'chosen', chosenStepIndex: decomposition.chosenStepIndex, selectionBasis: final.selectionBasis })
-        }
-      }
-    } catch {
-      decomposition.status = 'failed'
-    }
-  }
-
-  try {
-    let result
-    let compactRecovery = false
-    if (final) {
-      try {
-        result = await withDeadline(askLlm(message, config, { screen: final }), SCREENED_LLM_TIMEOUT_MS, 'Screened LLM request')
-      } catch (error) {
-        const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-        if (!timedOut) throw error
-        emit({
-          type: 'result',
-          ...final,
-          comparison: buildComparison(final),
-          mode: 'jev-screened',
-          jevEvaluated: true,
-          screening: 'jev-first',
-          llmStatus: 'timed_out_after_screen',
-          schema: typeSafeExample(final, message),
-          decomposition,
-        })
-        return
-      }
-    } else {
+      let result
+      let compactRecovery = false
       try {
         result = await withDeadline(askLlm(message, config), LLM_TIMEOUT_MS, 'LLM request')
       } catch (error) {
@@ -678,26 +668,93 @@ async function produceAdvice(message, config, emit) {
         result = await withDeadline(askLlm(message, config, { compact: true }), COMPACT_LLM_TIMEOUT_MS, 'Compact LLM request')
         compactRecovery = true
       }
+      emit({
+        type: 'result',
+        ...result.card,
+        comparison: buildComparison(result.card),
+        mode: compactRecovery ? 'live-compact' : 'live',
+        jevEvaluated: false,
+        screening: 'llm-only',
+        schema: typeSafeExample(result.card, message),
+        decomposition,
+      })
+    } catch (error) {
+      emit({ type: 'result', ...degradedCard(message, error?.message || String(error)), decomposition })
     }
-    const card = final ? { ...result.card, ...fieldOverrides(final), screenedDecision: final.decision } : result.card
+    return
+  }
+
+  emit({ type: 'stage', stage: 'decomposing' })
+  const steps = await attemptDecompose(message, config, emit)
+  if (!steps) {
+    decomposition.status = 'failed'
+    emit({ type: 'result', ...failedCard(), decomposition })
+    return
+  }
+  decomposition.steps = steps.map((step) => step.decision)
+  emit({ type: 'stage', stage: 'steps', steps: decomposition.steps })
+
+  const pseudo = normalizeCard({ candidates: steps })
+  const jev = await askJevTimed(message, pseudo, config, RECHECK_JEV_TIMEOUT_MS)
+  if (!jev) {
+    decomposition.status = 'failed'
+    emit({ type: 'result', ...failedCard('Jev did not answer the screening'), decomposition })
+    return
+  }
+
+  const chosen = jev.choice === 'none' ? null : pseudo.candidates.find((candidate) => candidate.id === jev.choice) || null
+  decomposition.status = chosen ? 'applied' : 'rejected'
+  decomposition.chosenStepIndex = chosen ? pseudo.candidates.indexOf(chosen) : null
+  decomposition.minScoreAfter = chosen ? formatScore(minScreenScore(jev, chosen.id)) : null
+
+  const final = applyJev(pseudo, jev)
+  if (chosen) {
+    final.summary = `The chosen step repeats one question: ${chosen.decision} ${chosen.jevOwns}`
+  } else {
+    final.summary = `Jev screened all ${steps.length} steps taken from your description and found none bounded, observable, and repeated enough — use code or a general LLM for this pipeline for now.`
+  }
+  emit({ type: 'stage', stage: 'screened', verdict: final.verdict, selectionBasis: final.selectionBasis })
+
+  try {
+    let result
+    try {
+      result = await withDeadline(askLlm(message, config, { screen: final }), SCREENED_LLM_TIMEOUT_MS, 'Screened LLM request')
+    } catch (error) {
+      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+      if (!timedOut) throw error
+      emit({
+        type: 'result',
+        ...final,
+        comparison: buildComparison(final),
+        mode: 'jev-screened',
+        jevEvaluated: true,
+        screening: 'jev-first',
+        llmStatus: 'timed_out_after_screen',
+        schema: typeSafeExample(final, message),
+        decomposition,
+      })
+      return
+    }
+    const card = { ...result.card, ...fieldOverrides(final), screenedDecision: final.decision }
     emit({
       type: 'result',
       ...card,
       comparison: buildComparison(card),
-      mode: compactRecovery ? 'live-compact' : 'live',
-      jevEvaluated: Boolean(final),
-      screening: final ? 'jev-first' : 'llm-only',
+      mode: 'live',
+      jevEvaluated: true,
+      screening: 'jev-first',
       schema: typeSafeExample(card, message),
       decomposition,
     })
   } catch (error) {
-    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError'
-    const detail = timedOut
-      ? `the LLM and compact recovery pass did not answer within the release budget — please try again`
-      : error?.message || error
-    const fallback = degradedCard(message, detail)
-    const payload = final ? { ...fallback, ...fieldOverrides(final), jevEvaluated: true, screening: 'jev-first' } : fallback
-    emit({ type: 'result', ...payload, decomposition })
+    emit({
+      type: 'result',
+      ...degradedCard(message, error?.message || String(error)),
+      ...fieldOverrides(final),
+      jevEvaluated: true,
+      screening: 'jev-first',
+      decomposition,
+    })
   }
 }
 
