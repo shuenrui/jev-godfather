@@ -109,6 +109,10 @@ Field rules:
 - stateFields: 2-5 inputs observably available at the moment the step runs, named concretely.
 - jevOwns: one short sentence (10 words or fewer) naming exactly what this step picks.
 - codeOwns: one short sentence (12 words or fewer) naming what deterministic code does around this step.
+- avoid: one short sentence (14 words or fewer) naming the ONE thing most likely to be wrongly asked of Jev in this specific step.
+- threshold: one short sentence (14 words or fewer) proposing a starting confidence rule for acting on this step's answer.
+- fallback: one short sentence (12 words or fewer) stating what happens when Jev is unsure or unavailable for this step.
+- successTest: one short sentence (14 words or fewer) naming the historical data that would prove this step's decision quality.
 
 Return ONLY valid JSON:
 {
@@ -119,7 +123,11 @@ Return ONLY valid JSON:
       "choices": string[],
       "stateFields": string[],
       "jevOwns": string,
-      "codeOwns": string
+      "codeOwns": string,
+      "avoid": string,
+      "threshold": string,
+      "fallback": string,
+      "successTest": string
     }
   ]
 }
@@ -405,9 +413,9 @@ async function askDecompose(message, config, { lite = false, timeoutMs = DECOMPO
       ],
       // Reasoning models (e.g. glm-5.3-flash) burn max_tokens on hidden
       // thinking; default thinking produced zero content. reasoning_effort
-      // "none" answers directly at ~26 tok/s, so 5-7 concrete steps fit in
-      // this budget given the generous deadline.
-      max_tokens: lite ? 700 : 1500,
+      // "none" answers directly at 60-72 tok/s; the full ten-field step
+      // schema needs this budget given the generous deadline.
+      max_tokens: lite ? 700 : 2200,
       reasoning_effort: 'none',
     }),
     signal: AbortSignal.timeout(timeoutMs),
