@@ -55,7 +55,8 @@ Jev and code.
    description and found none…"). The response carries a `decomposition`
    object: `applied | rejected | failed | not-configured`, the steps, the
    chosen index, and its score.
-3. **Explanation** (optional polish, 6s deadline): the LLM explains around
+3. **Explanation** (optional polish, 20s deadline aligned with the connection
+   budget so slow-but-successful prose is adopted, not discarded): the LLM
    the final boundary with the screening marked authoritative. If it misses
    its window the screened card ships anyway (`jev-screened` mode).
 4. **Failure is honest, never generic**: if both decomposition attempts fail,
@@ -73,7 +74,7 @@ Responses stream as **NDJSON** (`Content-Type: application/x-ndjson`):
 `{"type":"result",…}` event. The client renders stages in a live process
 panel and collapses it into the single recommendation card on result. Plain
 JSON remains for validation errors and non-streaming clients. Waiting is a
-deliberate trade: worst case ~156s (90+60+6+6) with heartbeats and a working
+deliberate trade: worst case ~176s (90+60+6+20) with heartbeats and a working
 panel, median ~8–20s on the live provider, because a tailored answer you can
 watch forming beats a fast generic one. Budgets reflect the provider's
 measured ~25 tokens/s and its reasoning-mode trap (hidden thinking once ate

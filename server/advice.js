@@ -7,7 +7,7 @@ import { pickAdvice } from '../src/adviceLibrary.js'
 const LLM_TIMEOUT_MS = 20000
 const COMPACT_LLM_TIMEOUT_MS = 5000
 const JEV_TIMEOUT_MS = 2000
-const SCREENED_LLM_TIMEOUT_MS = 6000
+const SCREENED_LLM_TIMEOUT_MS = 20000
 // The tailored path may wait long: a slow provider is worth waiting for
 // rather than failing or substituting generic advice. Heartbeat stage events
 // keep the stream (and the user) alive through the wait.
