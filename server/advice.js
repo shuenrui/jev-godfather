@@ -97,6 +97,7 @@ const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user'
 
 Vocabulary rules — these matter most:
 - Use the user's own nouns, labels, queues, thresholds, and categories verbatim.
+- Every decision must be self-contained: name the platform, entity, or artifact explicitly (e.g. "the LinkedIn company profile", not "raw profile text" or "the item"). A step must be understandable with no other context.
 - Every decision must name its real subject (the ticket, the email, the comment, the drone), never a vague placeholder like "the item".
 - If the user enumerates options (e.g. four email categories), put those exact options into the choices of ONE "choice" question. Do not split one enumerated set into several yes/no steps.
 - Never use placeholder options like act/defer/escalate unless the user used those words.
