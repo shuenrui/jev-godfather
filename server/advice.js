@@ -93,7 +93,7 @@ Return ONLY valid JSON with exactly these keys:
 
 Return one or two candidate boundaries. Keep every string short and operational. No markdown or text outside JSON.`
 
-const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into 5-7 concrete operational steps in execution order that together cover the WHOLE described pipeline — intake, each judgment, each action, each check the user mentions. Each step names one repeated decision the running system makes every time it runs. Omit a stage only if the user truly has none.
+const DECOMPOSE_SYSTEM_PROMPT = `You are a workflow analyst. Decompose the user's project description into at least 5 concrete operational steps in execution order that together cover the WHOLE described pipeline — intake, each judgment, each action, each check the user mentions. Each step names one repeated decision the running system makes every time it runs. Omit a stage only if the user truly has none.
 
 Vocabulary rules — these matter most:
 - Use the user's own nouns, labels, queues, thresholds, and categories verbatim.
@@ -392,7 +392,7 @@ async function askLlm(message, config, { compact = false, screen = null } = {}) 
   }
 }
 
-async function askDecompose(message, config, { lite = false, timeoutMs = DECOMPOSE_LLM_TIMEOUT_MS } = {}) {
+async function askDecompose(message, config, { lite = false, refine = false, timeoutMs = DECOMPOSE_LLM_TIMEOUT_MS } = {}) {
   const { llmKey: key, llmBaseUrl: baseUrl, llmModel: model } = config
   const session = createHash('sha256').update(`decompose:${message}`).digest('hex').slice(0, 64)
 
@@ -409,7 +409,11 @@ async function askDecompose(message, config, { lite = false, timeoutMs = DECOMPO
       temperature: 0.2,
       messages: [
         { role: 'system', content: DECOMPOSE_SYSTEM_PROMPT },
-        { role: 'user', content: lite ? `${message.slice(0, 3600)}\n\nList only the 3 most decision-critical steps.` : message.slice(0, 3600) },
+        { role: 'user', content: refine
+          ? `${message.slice(0, 3600)}\n\nThis breakdown has too few steps. List at least 6 of the most granular repeated decisions the running system makes — include validation, error handling, deduplication, rate limits, scheduling, and storage decisions where they plausibly exist.`
+          : lite
+            ? `${message.slice(0, 3600)}\n\nList only the 3 most decision-critical steps.`
+            : message.slice(0, 3600) },
       ],
       // Reasoning models (e.g. glm-5.3-flash) burn max_tokens on hidden
       // thinking; default thinking produced zero content. reasoning_effort
@@ -443,16 +447,28 @@ function withHeartbeat(promise, emit) {
 }
 
 async function attemptDecompose(message, config, emit) {
+  let steps = null
   try {
-    const steps = await withHeartbeat(askDecompose(message, config), emit)
-    if (steps) return steps
-  } catch { /* fall through to retry */ }
-  emit({ type: 'stage', stage: 'decomposing', retry: true })
-  try {
-    return await withHeartbeat(askDecompose(message, config, { lite: true, timeoutMs: DECOMPOSE_RETRY_TIMEOUT_MS }), emit)
+    steps = await withHeartbeat(askDecompose(message, config), emit)
   } catch {
-    return null
+    steps = null
   }
+  if (!steps) {
+    emit({ type: 'stage', stage: 'decomposing', retry: true })
+    try {
+      return await withHeartbeat(askDecompose(message, config, { lite: true, timeoutMs: DECOMPOSE_RETRY_TIMEOUT_MS }), emit)
+    } catch {
+      return null
+    }
+  }
+  if (steps.length < 5) {
+    emit({ type: 'stage', stage: 'decomposing', refine: true })
+    try {
+      const refined = await withHeartbeat(askDecompose(message, config, { refine: true, timeoutMs: DECOMPOSE_RETRY_TIMEOUT_MS }), emit)
+      if (refined && refined.length > steps.length) return refined
+    } catch { /* keep the shallower breakdown */ }
+  }
+  return steps
 }
 
 async function askJevTimed(message, card, config, timeoutMs) {

@@ -104,7 +104,7 @@ function stageLines(stages) {
   for (const event of stages) {
     if (event.stage === 'screening') lines.push(`Seed boundary · ${event.decision}`)
     else if (event.stage === 'screened') lines.push(`Jev screened · ${event.verdict}`)
-    else if (event.stage === 'decomposing') lines.push(event.retry ? 'Provider slow — retrying a shorter decomposition…' : 'Decomposing the workflow into steps…')
+    else if (event.stage === 'decomposing') lines.push(event.refine ? 'Refining the breakdown for deeper sub-decisions…' : event.retry ? 'Provider slow — retrying a shorter decomposition…' : 'Decomposing the workflow into steps…')
     else if (event.stage === 'waiting') lines.push(`Still waiting on the provider · ${event.seconds}s`)
     else if (event.stage === 'steps') (event.steps || []).forEach((step, index) => lines.push(`${index + 1}. ${step}`))
     else if (event.stage === 'chosen') lines.push(event.chosenStepIndex == null ? 'Jev kept the seed boundary' : `Jev chose step ${event.chosenStepIndex + 1}`)
