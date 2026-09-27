@@ -65,7 +65,7 @@ Jev and code.
    exist: no-key `demo` mode and the browser's `offline` cache, both badged as
    generic.
 5. Degraded paths without a TypeSafe key (LLM-only) keep the earlier single
-   advisor flow (10s + compact 5s).
+   advisor flow (20s + compact 5s).
 
 Responses stream as **NDJSON** (`Content-Type: application/x-ndjson`):
 `{"type":"stage",…}` events (`decomposing`, `waiting` heartbeats every 15s,
